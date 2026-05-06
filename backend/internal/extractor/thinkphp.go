@@ -1,6 +1,7 @@
 package extractor
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 )
@@ -16,7 +17,7 @@ func (e *ThinkPHPExtractor) Match(raw string) bool {
 func (e *ThinkPHPExtractor) Extract(raw string) (*ExtractResult, error) {
 	match := thinkphpSQLRe.FindStringSubmatch(raw)
 	if match == nil {
-		return nil, nil
+		return nil, errors.New("could not extract SQL from ThinkPHP log")
 	}
 
 	sql := strings.TrimSpace(match[1])

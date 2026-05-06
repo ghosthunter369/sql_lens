@@ -1,32 +1,37 @@
 package model
 
 type SQLAnalysisResult struct {
-	StatementType string       `json:"statementType"`
-	Dialect       string       `json:"dialect"`
-	RawSQL        string       `json:"rawSql"`
-	RestoredSQL   string       `json:"restoredSql"`
-	FormattedSQL  string       `json:"formattedSql"`
-	Summary       SQLSummary   `json:"summary"`
-	Tables        []TableMeta  `json:"tables"`
-	Joins         []JoinMeta   `json:"joins"`
-	Fields        []FieldMeta  `json:"fields"`
-	WhereTree     *ConditionNode `json:"whereTree,omitempty"`
-	GroupBy       []GroupByMeta `json:"groupBy"`
-	OrderBy       []OrderByMeta `json:"orderBy"`
-	Limit         *LimitMeta    `json:"limit,omitempty"`
-	Graph         GraphMeta     `json:"graph"`
-	Risks         []RiskMeta    `json:"risks"`
+	StatementType string          `json:"statementType"`
+	Dialect       string          `json:"dialect"`
+	RawSQL        string          `json:"rawSql"`
+	RestoredSQL   string          `json:"restoredSql"`
+	FormattedSQL  string          `json:"formattedSql"`
+	Summary       SQLSummary      `json:"summary"`
+	Tables        []TableMeta     `json:"tables"`
+	Joins         []JoinMeta      `json:"joins"`
+	Fields        []FieldMeta     `json:"fields"`
+	WhereTree     *ConditionNode  `json:"whereTree,omitempty"`
+	GroupBy       []GroupByMeta   `json:"groupBy"`
+	OrderBy       []OrderByMeta   `json:"orderBy"`
+	Limit         *LimitMeta      `json:"limit,omitempty"`
+	Graph         GraphMeta       `json:"graph"`
+	Risks         []RiskMeta      `json:"risks"`
+	CTEs          []CTEDefinition `json:"ctes,omitempty"`
+	SetOperations []SetOperation  `json:"setOperations,omitempty"`
 }
 
 type SQLSummary struct {
-	TableCount int    `json:"tableCount"`
-	JoinCount  int    `json:"joinCount"`
-	FieldCount int    `json:"fieldCount"`
-	WhereCount int    `json:"whereCount"`
-	HasGroupBy bool   `json:"hasGroupBy"`
-	HasOrderBy bool   `json:"hasOrderBy"`
-	HasLimit   bool   `json:"hasLimit"`
-	Complexity string `json:"complexity"`
+	TableCount    int    `json:"tableCount"`
+	JoinCount     int    `json:"joinCount"`
+	FieldCount    int    `json:"fieldCount"`
+	WhereCount    int    `json:"whereCount"`
+	HasGroupBy    bool   `json:"hasGroupBy"`
+	HasOrderBy    bool   `json:"hasOrderBy"`
+	HasLimit      bool   `json:"hasLimit"`
+	Complexity    string `json:"complexity"`
+	HasWindowFunc bool   `json:"hasWindowFunc"`
+	HasCTE        bool   `json:"hasCTE"`
+	HasUnion      bool   `json:"hasUnion"`
 }
 
 type TableMeta struct {
@@ -55,13 +60,29 @@ type JoinCondition struct {
 }
 
 type FieldMeta struct {
-	ID           string `json:"id"`
-	OutputName   string `json:"outputName"`
-	SourceTable  string `json:"sourceTable"`
-	SourceAlias  string `json:"sourceAlias"`
-	SourceColumn string `json:"sourceColumn"`
-	Expression   string `json:"expression"`
-	FieldType    string `json:"fieldType"`
+	ID           string          `json:"id"`
+	OutputName   string          `json:"outputName"`
+	SourceTable  string          `json:"sourceTable"`
+	SourceAlias  string          `json:"sourceAlias"`
+	SourceColumn string          `json:"sourceColumn"`
+	Expression   string          `json:"expression"`
+	FieldType    string          `json:"fieldType"`
+	DeepSources  []DeepSourceRef `json:"deepSources,omitempty"`
+	FuncCategory string          `json:"funcCategory,omitempty"`
+	WindowSpec   *WindowSpecMeta `json:"windowSpec,omitempty"`
+}
+
+// WindowSpecMeta describes a window function's OVER clause.
+type WindowSpecMeta struct {
+	PartitionBy []string      `json:"partitionBy,omitempty"`
+	OrderBy     []OrderByMeta `json:"orderBy,omitempty"`
+	FrameClause string        `json:"frameClause,omitempty"`
+}
+
+type DeepSourceRef struct {
+	Table  string `json:"table"`
+	Alias  string `json:"alias,omitempty"`
+	Column string `json:"column"`
 }
 
 type ConditionNode struct {
@@ -124,4 +145,20 @@ type RiskMeta struct {
 	Message     string `json:"message"`
 	Suggestion  string `json:"suggestion"`
 	RelatedExpr string `json:"relatedExpr,omitempty"`
+}
+
+// CTEDefinition represents a Common Table Expression (WITH clause).
+type CTEDefinition struct {
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	Columns []string           `json:"columns,omitempty"`
+	Query   *SQLAnalysisResult `json:"query,omitempty"`
+	RawSQL  string             `json:"rawSql"`
+}
+
+// SetOperation represents UNION/INTERSECT/EXCEPT between SELECT statements.
+type SetOperation struct {
+	Type  string             `json:"type"`
+	Left  *SQLAnalysisResult `json:"left"`
+	Right *SQLAnalysisResult `json:"right"`
 }

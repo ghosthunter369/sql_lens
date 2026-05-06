@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useSqlStore } from '@/store/useSqlStore'
 import { buildMarkdownReport } from '@/api/sql'
+import { formatSQL } from '@/utils/format'
 import type { Dialect, LogType } from '@/types/sql'
 
 const EXAMPLE_SQL = `SELECT
@@ -43,6 +44,17 @@ export default function SqlToolbar() {
     setRawText(EXAMPLE_SQL)
     message.success('已填入复杂示例 SQL')
   }, [setRawText, message])
+
+  const handleFormat = useCallback(() => {
+    const rawText = useSqlStore.getState().rawText
+    if (!rawText.trim()) {
+      message.warning('请先输入 SQL')
+      return
+    }
+    const formatted = formatSQL(rawText, dialect)
+    setRawText(formatted)
+    message.success('SQL 已格式化')
+  }, [dialect, setRawText, message])
 
   const handleExportMarkdown = useCallback(async () => {
     if (!result) return
@@ -83,10 +95,13 @@ export default function SqlToolbar() {
           value={dialect}
           onChange={(v) => setDialect(v)}
           size="small"
-          style={{ width: 110, borderRadius: 6 }}
+          style={{ width: 130, borderRadius: 6 }}
           options={[
-            { value: 'mysql', label: '🔵 MySQL' },
+            { value: 'mysql', label: '🐬 MySQL' },
             { value: 'postgresql', label: '🐘 PostgreSQL' },
+            { value: 'oracle', label: '🔶 Oracle' },
+            { value: 'sqlserver', label: '🏢 SQL Server' },
+            { value: 'sqlite', label: '🪶 SQLite' },
           ]}
         />
         <Select<LogType>
@@ -112,7 +127,7 @@ export default function SqlToolbar() {
             </Button>
           </Tooltip>
           <Tooltip title="格式化 SQL (Ctrl+Shift+F)">
-            <Button size="small" icon={<FormatPainterOutlined />} disabled>
+            <Button size="small" icon={<FormatPainterOutlined />} onClick={handleFormat}>
               格式化
             </Button>
           </Tooltip>

@@ -20,6 +20,8 @@ var rules = []RiskRule{
 	&OrderByRandRule{},
 	&TooManyORRule{},
 	&SubqueryDepthRule{},
+	&WindowFuncWithoutOrderByRule{},
+	&CTENoTerminationRule{},
 }
 
 func AnalyzeRisks(result *model.SQLAnalysisResult) []model.RiskMeta {
@@ -223,9 +225,9 @@ func (r *SubqueryDepthRule) Check(result *model.SQLAnalysisResult) []model.RiskM
 			{
 				ID:         utils.NewID("risk"),
 				Level:      "warning",
-				Type:        "SUBQUERY_DEPTH",
+				Type:       "SUBQUERY_DEPTH",
 				Message:    "子查询嵌套层级较深",
-				Suggestion:  "深层子查询会降低 SQL 可读性和性能，建议检查是否可以改写为 JOIN 或 CTE。",
+				Suggestion: "深层子查询会降低 SQL 可读性和性能，建议检查是否可以改写为 JOIN 或 CTE。",
 			},
 		}
 	}
@@ -236,8 +238,8 @@ func countSubqueryDepth(sql string) int {
 	maxDepth := 0
 	currentDepth := 0
 	upper := strings.ToUpper(sql)
-	for i := 0; i < len(upper)-6; i++ {
-		if upper[i:i+7] == "(SELECT" || upper[i:i+7] == "( SELECT" {
+	for i := 0; i < len(upper)-7; i++ {
+		if upper[i:i+8] == "( SELECT" || (i < len(upper)-6 && upper[i:i+7] == "(SELECT") {
 			currentDepth++
 			if currentDepth > maxDepth {
 				maxDepth = currentDepth
@@ -245,4 +247,63 @@ func countSubqueryDepth(sql string) int {
 		}
 	}
 	return maxDepth
+}
+
+// Window function without ORDER BY in OVER clause
+type WindowFuncWithoutOrderByRule struct{}
+
+func (r *WindowFuncWithoutOrderByRule) Check(result *model.SQLAnalysisResult) []model.RiskMeta {
+	var risks []model.RiskMeta
+	for _, field := range result.Fields {
+		if field.WindowSpec != nil {
+			// Window functions that need ORDER BY for deterministic results
+			upperExpr := strings.ToUpper(field.Expression)
+			needsOrder := strings.Contains(upperExpr, "ROW_NUMBER") ||
+				strings.Contains(upperExpr, "RANK") ||
+				strings.Contains(upperExpr, "DENSE_RANK") ||
+				strings.Contains(upperExpr, "NTILE") ||
+				strings.Contains(upperExpr, "LAG") ||
+				strings.Contains(upperExpr, "LEAD")
+			if needsOrder && len(field.WindowSpec.OrderBy) == 0 {
+				risks = append(risks, model.RiskMeta{
+					ID:          utils.NewID("risk"),
+					Level:       "warning",
+					Type:        "WINDOW_NO_ORDER",
+					Message:     "窗口函数缺少 ORDER BY: " + field.Expression,
+					Suggestion:  "ROW_NUMBER/RANK/LAG/LEAD 等窗口函数需要 ORDER BY 才能保证结果确定性。",
+					RelatedExpr: field.Expression,
+				})
+			}
+		}
+	}
+	return risks
+}
+
+// Recursive CTE without termination condition
+type CTENoTerminationRule struct{}
+
+func (r *CTENoTerminationRule) Check(result *model.SQLAnalysisResult) []model.RiskMeta {
+	if len(result.CTEs) == 0 {
+		return nil
+	}
+	// Simple heuristic: check if any CTE's raw SQL contains the CTE's own name (self-reference)
+	// and lacks a clear termination (WHERE or LIMIT)
+	var risks []model.RiskMeta
+	for _, cte := range result.CTEs {
+		upper := strings.ToUpper(cte.RawSQL)
+		cteNameUpper := strings.ToUpper(cte.Name)
+		if strings.Contains(upper, cteNameUpper) {
+			// Self-referencing CTE — check for WHERE or LIMIT as termination
+			if !strings.Contains(upper, "WHERE") && !strings.Contains(upper, "LIMIT") {
+				risks = append(risks, model.RiskMeta{
+					ID:         utils.NewID("risk"),
+					Level:      "warning",
+					Type:       "CTE_NO_TERMINATION",
+					Message:    "递归 CTE 可能缺少终止条件: " + cte.Name,
+					Suggestion: "递归 CTE 应包含 WHERE 或 LIMIT 来防止无限递归。",
+				})
+			}
+		}
+	}
+	return risks
 }

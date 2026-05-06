@@ -1,4 +1,4 @@
-export type Dialect = 'mysql' | 'postgresql' | 'oracle' | 'sqlserver'
+export type Dialect = 'mysql' | 'postgresql' | 'oracle' | 'sqlserver' | 'sqlite'
 export type LogType = 'auto' | 'plain' | 'laravel' | 'mybatis' | 'thinkphp'
 
 export interface ParseSQLRequest {
@@ -28,6 +28,8 @@ export interface SQLAnalysisResult {
   limit?: LimitMeta
   graph: GraphMeta
   risks: RiskMeta[]
+  ctes?: CTEDefinition[]
+  setOperations?: SetOperation[]
 }
 
 export interface SQLSummary {
@@ -39,6 +41,9 @@ export interface SQLSummary {
   hasOrderBy: boolean
   hasLimit: boolean
   complexity: 'LOW' | 'MEDIUM' | 'HIGH'
+  hasWindowFunc?: boolean
+  hasCTE?: boolean
+  hasUnion?: boolean
 }
 
 export interface TableMeta {
@@ -66,6 +71,8 @@ export interface JoinCondition {
   right: string
 }
 
+export type FuncCategory = 'aggregate' | 'window' | 'scalar' | 'datetime' | 'string' | 'math' | 'conditional' | 'cast' | 'json'
+
 export interface FieldMeta {
   id: string
   outputName: string
@@ -73,12 +80,27 @@ export interface FieldMeta {
   sourceAlias: string
   sourceColumn: string
   expression: string
-  fieldType: 'column' | 'function' | 'aggregate' | 'case' | 'subquery' | 'wildcard'
+  fieldType: 'column' | 'function' | 'aggregate' | 'case' | 'subquery' | 'wildcard' | 'window'
+  deepSources?: DeepSourceRef[]
+  funcCategory?: FuncCategory
+  windowSpec?: WindowSpecMeta
+}
+
+export interface DeepSourceRef {
+  table: string
+  alias?: string
+  column: string
+}
+
+export interface WindowSpecMeta {
+  partitionBy?: string[]
+  orderBy?: OrderByMeta[]
+  frameClause?: string
 }
 
 export interface ConditionNode {
   id: string
-  type: 'AND' | 'OR' | 'CONDITION'
+  type: 'AND' | 'OR' | 'CONDITION' | 'NOT'
   expr?: string
   table?: string
   field?: string
@@ -131,6 +153,20 @@ export interface OrderByMeta {
 export interface LimitMeta {
   limit: number
   offset?: number
+}
+
+export interface CTEDefinition {
+  id: string
+  name: string
+  columns?: string[]
+  query?: SQLAnalysisResult
+  rawSql: string
+}
+
+export interface SetOperation {
+  type: 'UNION' | 'UNION ALL' | 'INTERSECT' | 'EXCEPT'
+  left: SQLAnalysisResult
+  right: SQLAnalysisResult
 }
 
 export interface APIResponse<T> {

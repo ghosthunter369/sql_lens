@@ -30,12 +30,12 @@ function JoinEdge({
 
   // Build condition label — show up to 2 conditions compactly
   let condLabel = ''
-  if (edgeData?.conditions && edgeData.conditions.length > 0) {
-    const conds = edgeData.conditions
+  const conds = edgeData?.conditions
+  if (Array.isArray(conds) && conds.length > 0) {
     condLabel = conds.slice(0, 2).map(formatCondition).join(', ')
     if (conds.length > 2) condLabel += ` (+${conds.length - 2})`
   } else if (edgeData?.rawExpr) {
-    condLabel = edgeData.rawExpr
+    condLabel = String(edgeData.rawExpr)
   }
 
   // Truncate if too long for edge display, full text in title

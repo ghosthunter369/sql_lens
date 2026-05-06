@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { Spin, Alert } from 'antd'
 import { useSqlStore } from '@/store/useSqlStore'
+import { formatSQL } from '@/utils/format'
 import SqlToolbar from '@/components/SqlToolbar/SqlToolbar'
 import SqlEditor from '@/components/SqlEditor/SqlEditor'
 import SummaryCards from '@/components/SummaryCards/SummaryCards'
@@ -11,14 +12,24 @@ export default function Home() {
   const loading = useSqlStore((s) => s.loading)
   const error = useSqlStore((s) => s.error)
   const result = useSqlStore((s) => s.result)
-  const clear = useSqlStore((s) => s.clear)
+  const clearError = useSqlStore((s) => s.clearError)
+  const setRawText = useSqlStore((s) => s.setRawText)
+  const dialect = useSqlStore((s) => s.dialect)
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       useSqlStore.getState().parseSql()
     }
-  }, [])
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+      e.preventDefault()
+      const rawText = useSqlStore.getState().rawText
+      if (rawText.trim()) {
+        const formatted = formatSQL(rawText, dialect)
+        setRawText(formatted)
+      }
+    }
+  }, [setRawText, dialect])
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }} onKeyDown={handleKeyDown}>
@@ -76,10 +87,15 @@ export default function Home() {
               closable
               showIcon
               style={{ margin: '12px 16px 0', borderRadius: 8 }}
-              onClose={() => clear()}
+              onClose={() => clearError()}
             />
           )}
-          {result ? (
+          {loading ? (
+            <div className="sql-lens-loading">
+              <Spin size="large" />
+              <span>正在解析中...</span>
+            </div>
+          ) : result ? (
             <>
               <SummaryCards />
               <div className="sql-lens-tabs-wrapper">

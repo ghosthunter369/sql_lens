@@ -1,6 +1,7 @@
 package extractor
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 )
@@ -38,7 +39,7 @@ func (e *LaravelExtractor) Extract(raw string) (*ExtractResult, error) {
 	}
 
 	if sql == "" {
-		return nil, nil
+		return nil, errors.New("could not extract SQL from Laravel log")
 	}
 
 	// Remove time info from end like {"time":"0.23"}

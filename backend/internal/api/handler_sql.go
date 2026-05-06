@@ -69,7 +69,11 @@ func ParseSQLHandler(c *gin.Context) {
 	}
 
 	// 3. SQL Parse
-	sqlParser := parser.NewCustomParser()
+	dialectID := parser.DialectID(req.Dialect)
+	if !parser.IsValidDialectID(req.Dialect) {
+		dialectID = parser.DialectMySQL
+	}
+	sqlParser := parser.NewCustomParserWithDialect(dialectID)
 	analysisResult, err := sqlParser.Parse(restoredSQL)
 	if err != nil {
 		c.JSON(http.StatusOK, model.APIResponse{

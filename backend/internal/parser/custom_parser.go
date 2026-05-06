@@ -8,22 +8,29 @@ import (
 	"unicode"
 )
 
-type CustomParser struct{}
+type CustomParser struct {
+	dialect DialectConfig
+}
 
 func NewCustomParser() *CustomParser {
-	return &CustomParser{}
+	return &CustomParser{dialect: GetDialectConfig(DialectMySQL)}
+}
+
+func NewCustomParserWithDialect(id DialectID) *CustomParser {
+	return &CustomParser{dialect: GetDialectConfig(id)}
 }
 
 func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 	utils.ResetIDs()
 
-	t := newTokenizer(sql)
 	stmtType := ""
 	upper := strings.ToUpper(strings.TrimSpace(sql))
 
 	switch {
 	case strings.HasPrefix(upper, "SELECT"):
 		stmtType = "SELECT"
+	case strings.HasPrefix(upper, "WITH"):
+		stmtType = "SELECT" // CTE starts with WITH
 	case strings.HasPrefix(upper, "INSERT"):
 		stmtType = "INSERT"
 	case strings.HasPrefix(upper, "UPDATE"):
@@ -36,43 +43,75 @@ func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 		return nil, fmt.Errorf("unsupported statement type")
 	}
 
+	// Handle DML statements
+	if stmtType == "INSERT" {
+		return p.parseInsert(sql)
+	}
+	if stmtType == "UPDATE" {
+		return p.parseUpdate(sql)
+	}
+	if stmtType == "DELETE" {
+		return p.parseDelete(sql)
+	}
 	if stmtType != "SELECT" {
-		return nil, fmt.Errorf("currently only SELECT statements are supported")
+		return nil, fmt.Errorf("currently only SELECT/INSERT/UPDATE/DELETE statements are supported")
 	}
 
 	result := &model.SQLAnalysisResult{
 		StatementType: stmtType,
-		Dialect:       "mysql",
+		Dialect:       string(p.dialect.ID),
+	}
+
+	// Tokenize once, reuse the token array for all parse passes
+	tokens := tokenize(sql, p.dialect)
+
+	// Parse CTEs if present
+	var ctes []model.CTEDefinition
+	if len(tokens) > 0 && strings.ToUpper(tokens[0].value) == "WITH" {
+		ctes, tokens = p.parseCTEs(tokens)
+		if len(ctes) > 0 {
+			result.CTEs = ctes
+			// Register CTE names as virtual tables in alias map
+		}
 	}
 
 	// Build table alias map and parse tables
 	aliasMap := make(map[string]string)
 	tableAliasMap := make(map[string]string) // tableName -> alias
 
+	// Register CTE names as virtual tables
+	for _, cte := range ctes {
+		aliasMap[strings.ToLower(cte.Name)] = cte.Name
+	}
+
+	t := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	tables, joins, err := p.parseFromAndJoins(t, aliasMap, tableAliasMap)
 	if err != nil {
 		return nil, fmt.Errorf("parse FROM/JOIN error: %w", err)
 	}
 
-	// Reset tokenizer to parse SELECT fields
-	t2 := newTokenizer(sql)
+	// Reuse token array for SELECT fields
+	t2 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	fields := p.parseSelectFields(t2, aliasMap)
 
-	// Reset to parse WHERE
-	t3 := newTokenizer(sql)
+	// Reuse token array for WHERE
+	t3 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	whereTree, whereCount := p.parseWhereClause(t3, aliasMap)
 
-	// Reset to parse GROUP BY
-	t4 := newTokenizer(sql)
+	// Reuse token array for GROUP BY
+	t4 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	groupBy := p.parseGroupBy(t4, aliasMap)
 
-	// Reset to parse ORDER BY
-	t5 := newTokenizer(sql)
+	// Reuse token array for ORDER BY
+	t5 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	orderBy := p.parseOrderBy(t5, aliasMap)
 
-	// Reset to parse LIMIT
-	t6 := newTokenizer(sql)
+	// Reuse token array for LIMIT
+	t6 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	limit := p.parseLimit(t6)
+
+	// Check for UNION/INTERSECT/EXCEPT after the main SELECT
+	setOps := p.parseSetOperations(tokens, result)
 
 	// Post-process: resolve join conditions to use table names instead of aliases
 	p.resolveJoinConditionAliases(joins, tableAliasMap)
@@ -85,6 +124,7 @@ func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 	result.OrderBy = orderBy
 	result.Limit = limit
 	result.Risks = make([]model.RiskMeta, 0)
+	result.SetOperations = setOps
 
 	// Ensure no nil slices
 	if result.Tables == nil {
@@ -119,16 +159,28 @@ func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 	// Populate table field lists (selected/join/filter)
 	p.populateTableFields(tables, fields, whereTree, joins)
 
+	// Check for window functions in fields
+	hasWindowFunc := false
+	for _, f := range fields {
+		if f.WindowSpec != nil {
+			hasWindowFunc = true
+			break
+		}
+	}
+
 	// Build summary
 	result.Summary = model.SQLSummary{
-		TableCount: len(tables),
-		JoinCount:  len(joins),
-		FieldCount: len(fields),
-		WhereCount: whereCount,
-		HasGroupBy: len(groupBy) > 0,
-		HasOrderBy: len(orderBy) > 0,
-		HasLimit:   limit != nil,
-		Complexity: p.calculateComplexity(len(joins), whereCount, len(groupBy), len(orderBy), sql),
+		TableCount:    len(tables),
+		JoinCount:     len(joins),
+		FieldCount:    len(fields),
+		WhereCount:    whereCount,
+		HasGroupBy:    len(groupBy) > 0,
+		HasOrderBy:    len(orderBy) > 0,
+		HasLimit:      limit != nil,
+		Complexity:    p.calculateComplexity(len(joins), whereCount, len(groupBy), len(orderBy), sql),
+		HasWindowFunc: hasWindowFunc,
+		HasCTE:        len(ctes) > 0,
+		HasUnion:      len(setOps) > 0,
 	}
 
 	// Build graph
@@ -145,8 +197,8 @@ func (p *CustomParser) parseFromAndJoins(t *tokenizer, aliasMap map[string]strin
 		return nil, nil, fmt.Errorf("FROM clause not found")
 	}
 
-	// Parse main FROM table
-	mainTable, err := p.parseTableRef(t, aliasMap, tableAliasMap)
+	// Parse main FROM table (could be subquery)
+	mainTable, err := p.parseTableRefOrSubquery(t, aliasMap, tableAliasMap)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse FROM table error: %w", err)
 	}
@@ -214,7 +266,7 @@ func (p *CustomParser) parseFromAndJoins(t *tokenizer, aliasMap map[string]strin
 			break
 		}
 
-		joinTable, err := p.parseTableRef(t, aliasMap, tableAliasMap)
+		joinTable, err := p.parseTableRefOrSubquery(t, aliasMap, tableAliasMap)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse JOIN table error: %w", err)
 		}
@@ -241,6 +293,72 @@ func (p *CustomParser) parseFromAndJoins(t *tokenizer, aliasMap map[string]strin
 	}
 
 	return tables, joins, nil
+}
+
+// parseTableRefOrSubquery handles both regular table refs and (SELECT ...) subquery aliases
+func (p *CustomParser) parseTableRefOrSubquery(t *tokenizer, aliasMap map[string]string, tableAliasMap map[string]string) (*model.TableMeta, error) {
+	if t.pos >= len(t.tokens) {
+		return nil, fmt.Errorf("unexpected end of input")
+	}
+
+	// Check if this is a subquery: ( SELECT ...
+	if t.tokens[t.pos].value == "(" {
+		// Skip the entire subquery to find the alias
+		t.pos++ // skip (
+		depth := 1
+		for t.pos < len(t.tokens) && depth > 0 {
+			if t.tokens[t.pos].value == "(" {
+				depth++
+			} else if t.tokens[t.pos].value == ")" {
+				depth--
+			}
+			if depth > 0 {
+				t.pos++
+			}
+		}
+		if t.pos < len(t.tokens) {
+			t.pos++ // skip closing )
+		}
+
+		// Now read the alias (AS alias or just alias)
+		alias := ""
+		if t.pos < len(t.tokens) {
+			nextVal := t.tokens[t.pos].value
+			nextUpper := strings.ToUpper(nextVal)
+			if nextUpper == "AS" {
+				t.pos++ // skip AS
+				if t.pos < len(t.tokens) {
+					alias = stripBackticks(t.tokens[t.pos].value)
+					t.pos++
+				}
+			} else if !isKeyword(nextUpper) && !isOperator(nextVal) && nextVal != "(" && nextVal != ")" && nextVal != "," {
+				alias = stripBackticks(nextVal)
+				t.pos++
+			}
+		}
+
+		// Generate a name for the subquery
+		name := alias
+		if name == "" {
+			name = fmt.Sprintf("subquery_%d", utils.NewID("sub"))
+		}
+
+		// Register in alias maps
+		aliasMap[strings.ToLower(name)] = name
+		if alias != "" {
+			tableAliasMap[name] = alias
+		}
+
+		return &model.TableMeta{
+			ID:    utils.NewID("table"),
+			Name:  name,
+			Alias: alias,
+			Role:  "subquery",
+		}, nil
+	}
+
+	// Regular table reference
+	return p.parseTableRef(t, aliasMap, tableAliasMap)
 }
 
 func (p *CustomParser) parseTableRef(t *tokenizer, aliasMap map[string]string, tableAliasMap map[string]string) (*model.TableMeta, error) {
@@ -329,6 +447,38 @@ func (p *CustomParser) parseSelectFields(t *tokenizer, aliasMap map[string]strin
 		}
 	}
 
+	// Handle SQL Server TOP N
+	if p.dialect.SupportTopN && t.pos < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "TOP" {
+		t.pos++ // skip TOP
+		// Skip optional PERCENT
+		if t.pos < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "PERCENT" {
+			t.pos++
+		}
+		// Skip optional (expr) or N
+		if t.pos < len(t.tokens) {
+			if t.tokens[t.pos].value == "(" {
+				t.pos++ // skip (
+				// skip until )
+				depth := 1
+				for t.pos < len(t.tokens) && depth > 0 {
+					if t.tokens[t.pos].value == "(" {
+						depth++
+					}
+					if t.tokens[t.pos].value == ")" {
+						depth--
+					}
+					t.pos++
+				}
+			} else if t.tokens[t.pos].kind == tokenNumber {
+				t.pos++ // skip N
+			}
+		}
+		// Skip optional WITH TIES
+		if t.pos+1 < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "WITH" && strings.ToUpper(t.tokens[t.pos+1].value) == "TIES" {
+			t.pos += 2
+		}
+	}
+
 	for t.pos < len(t.tokens) {
 		tok := t.tokens[t.pos]
 		upper := strings.ToUpper(tok.value)
@@ -382,28 +532,111 @@ func (p *CustomParser) analyzeField(expr string, aliasMap map[string]string) mod
 	asIdx := findASKeyword(expr)
 	var baseExpr string
 	if asIdx >= 0 {
-		// asIdx points to 'A' of "AS", so skip "AS " = 3 chars
 		field.OutputName = strings.TrimSpace(expr[asIdx+3:])
-		// baseExpr is everything before " AS "
 		baseExpr = strings.TrimSpace(expr[:asIdx-1])
 	} else {
-		// No AS — for simple columns use the column name as output
-		if isSimpleColumn(expr) {
-			if dotIdx := strings.LastIndex(expr, "."); dotIdx > 0 {
-				field.OutputName = stripBackticks(expr[dotIdx+1:])
+		baseExpr = expr
+	}
+
+	// --- Parse expression with ExprParser ---
+	tokens := tokenize(baseExpr, p.dialect)
+	ep := NewExprParser(tokens, p.dialect)
+	ast, err := ep.ParseExpression()
+	if err != nil {
+		// Fallback: treat as raw expression
+		field.FieldType = "column"
+		field.OutputName = stripBackticksAll(baseExpr)
+		return field
+	}
+
+	// --- Determine field type from AST ---
+	switch n := ast.(type) {
+	case *ColumnRef:
+		field.FieldType = "column"
+		if n.Table != "" {
+			if tableName, ok := aliasMap[strings.ToLower(n.Table)]; ok {
+				field.SourceTable = tableName
+				field.SourceAlias = n.Table
+			}
+			field.SourceColumn = n.Column
+		} else {
+			field.SourceColumn = stripBackticksAll(n.Column)
+		}
+	case *FunctionCall:
+		if n.Over != nil {
+			field.FieldType = "window"
+		} else {
+			field.FieldType = "function"
+		}
+	case *AggregateCall:
+		if n.Over != nil {
+			field.FieldType = "window"
+		} else {
+			field.FieldType = "aggregate"
+		}
+	case *CaseExpr:
+		field.FieldType = "case"
+	case *SubqueryExpr:
+		field.FieldType = "subquery"
+	case *CastExpr, *TypeCastExpr:
+		field.FieldType = "function"
+	default:
+		field.FieldType = "column"
+	}
+
+	// --- Set func category from registry ---
+	if field.FieldType == "function" || field.FieldType == "aggregate" || field.FieldType == "window" {
+		funcName := ""
+		switch n := ast.(type) {
+		case *FunctionCall:
+			funcName = n.Name
+		case *AggregateCall:
+			funcName = n.Name
+		}
+		if funcName != "" {
+			if info, ok := LookupFunction(funcName, p.dialect.ID); ok {
+				field.FuncCategory = string(info.Category)
 			} else {
-				field.OutputName = stripBackticks(expr)
+				field.FuncCategory = "scalar"
+			}
+		}
+	}
+
+	// --- Set window spec ---
+	switch n := ast.(type) {
+	case *FunctionCall:
+		if n.Over != nil {
+			field.WindowSpec = buildWindowSpecMeta(n.Over)
+		}
+	case *AggregateCall:
+		if n.Over != nil {
+			field.WindowSpec = buildWindowSpecMeta(n.Over)
+		}
+	}
+
+	// --- Set OutputName if not set by AS ---
+	if field.OutputName == "" {
+		if isSimpleColumn(baseExpr) {
+			if dotIdx := strings.LastIndex(baseExpr, "."); dotIdx > 0 {
+				field.OutputName = stripBackticks(baseExpr[dotIdx+1:])
+			} else {
+				field.OutputName = stripBackticks(baseExpr)
 			}
 		} else {
-			// For functions without AS, use a simplified name
-			funcName, _ := extractFunctionName(expr)
+			// For functions, use funcName(firstCol) pattern
+			funcName := ""
+			switch n := ast.(type) {
+			case *FunctionCall:
+				funcName = n.Name
+			case *AggregateCall:
+				funcName = n.Name
+			}
 			if funcName != "" {
-				firstCol := extractFirstColumn(expr)
-				if firstCol != "" {
-					if dotIdx := strings.LastIndex(firstCol, "."); dotIdx > 0 {
-						field.OutputName = stripBackticks(firstCol[dotIdx+1:])
-					} else if isSimpleColumn(firstCol) {
-						field.OutputName = stripBackticks(firstCol)
+				refs := CollectColumnRefs(ast)
+				if len(refs) > 0 {
+					col := refs[0].Column
+					if col != "" && col != "*" {
+						field.OutputName = strings.ToLower(funcName) + "_" + col
 					} else {
 						field.OutputName = funcName + "(...)"
 					}
@@ -411,39 +644,71 @@ func (p *CustomParser) analyzeField(expr string, aliasMap map[string]string) mod
 					field.OutputName = funcName + "(...)"
 				}
 			} else {
-				field.OutputName = stripBackticksAll(expr)
+				field.OutputName = stripBackticksAll(baseExpr)
 			}
 		}
-		baseExpr = expr
 	}
 
-	// --- Detect function name and type ---
-	funcName, isFunc := extractFunctionName(baseExpr)
-
-	// --- Determine field type ---
-	switch {
-	case isFunc && isAggregateFunc(funcName):
-		field.FieldType = "aggregate"
-	case isFunc && funcName == "CASE":
-		field.FieldType = "case"
-	case isFunc:
-		field.FieldType = "function"
-	default:
-		field.FieldType = "column"
+	// --- Extract deep sources from all column references ---
+	refs := CollectColumnRefs(ast)
+	deepSources := make(map[string]model.DeepSourceRef)
+	for _, ref := range refs {
+		if ref.Table != "" {
+			alias := ref.Table
+			colName := ref.Column
+			if tableName, ok := aliasMap[strings.ToLower(alias)]; ok {
+				key := tableName + "." + colName
+				if _, exists := deepSources[key]; !exists {
+					deepSources[key] = model.DeepSourceRef{
+						Table:  tableName,
+						Alias:  alias,
+						Column: colName,
+					}
+				}
+			}
+		}
+	}
+	if len(deepSources) > 0 {
+		field.DeepSources = make([]model.DeepSourceRef, 0, len(deepSources))
+		for _, ds := range deepSources {
+			field.DeepSources = append(field.DeepSources, ds)
+		}
 	}
 
-	// --- Resolve source table/column ---
-	if field.FieldType == "column" {
-		p.resolveSourceTable(baseExpr, aliasMap, &field)
-	} else {
-		// For function/aggregate: extract the first column reference from inside
-		firstCol := extractFirstColumn(baseExpr)
-		if firstCol != "" {
-			p.resolveSourceTable(firstCol, aliasMap, &field)
+	// --- Set shallow source for non-column fields from first column ref ---
+	if field.FieldType != "column" && field.SourceTable == "" {
+		for _, ref := range refs {
+			if ref.Table != "" {
+				if tableName, ok := aliasMap[strings.ToLower(ref.Table)]; ok {
+					field.SourceTable = tableName
+					field.SourceAlias = ref.Table
+					field.SourceColumn = ref.Column
+				}
+				break
+			}
 		}
 	}
 
 	return field
+}
+
+// buildWindowSpecMeta converts a WindowSpec AST to the model's WindowSpecMeta.
+func buildWindowSpecMeta(ws *WindowSpec) *model.WindowSpecMeta {
+	if ws == nil {
+		return nil
+	}
+	meta := &model.WindowSpecMeta{}
+	for _, p := range ws.PartitionBy {
+		meta.PartitionBy = append(meta.PartitionBy, p.String())
+	}
+	for _, o := range ws.OrderBy {
+		meta.OrderBy = append(meta.OrderBy, model.OrderByMeta{
+			Expression: o.Expr.String(),
+			Direction:  o.Direction,
+		})
+	}
+	meta.FrameClause = ws.FrameClause
+	return meta
 }
 
 // findASKeyword finds " AS " outside parentheses and quotes, returning the index of the space before AS.
@@ -646,6 +911,138 @@ func extractFromCaseWhen(inner string) string {
 	return ""
 }
 
+// extractAllColumnRefs finds all table.column references in an expression
+func extractAllColumnRefs(expr string) []string {
+	var refs []string
+	upper := strings.ToUpper(expr)
+	depth := 0
+	inQuote := false
+	var quoteChar byte
+	i := 0
+
+	for i < len(expr) {
+		ch := expr[i]
+		if ch == '\'' || ch == '"' {
+			if !inQuote {
+				inQuote = true
+				quoteChar = ch
+			} else if ch == quoteChar {
+				inQuote = false
+			}
+			i++
+			continue
+		}
+		if inQuote {
+			i++
+			continue
+		}
+		if ch == '(' {
+			depth++
+			i++
+			continue
+		} else if ch == ')' {
+			if depth > 0 {
+				depth--
+			}
+			i++
+			continue
+		}
+
+		// Skip SQL keywords
+		if depth == 0 && i+4 <= len(upper) {
+			wordEnd := i
+			for wordEnd < len(expr) && (unicode.IsLetter(rune(expr[wordEnd])) || expr[wordEnd] == '_') {
+				wordEnd++
+			}
+			word := upper[i:wordEnd]
+			skipKeywords := []string{"AND", "OR", "NOT", "IN", "IS", "NULL", "AS", "WHEN", "THEN", "ELSE", "END", "LIKE", "BETWEEN", "CASE"}
+			isSkip := false
+			for _, kw := range skipKeywords {
+				if word == kw {
+					isSkip = true
+					break
+				}
+			}
+			if isSkip {
+				i = wordEnd
+				continue
+			}
+		}
+
+		// Try to match table.column pattern
+		if ch != ' ' && ch != ',' && ch != '=' && ch != '!' && ch != '<' && ch != '>' && ch != '(' && ch != ')' {
+			// Read a potential identifier
+			start := i
+			for i < len(expr) && (unicode.IsLetter(rune(expr[i])) || unicode.IsDigit(rune(expr[i])) || expr[i] == '_' || expr[i] == '`') {
+				i++
+			}
+			ident := expr[start:i]
+			// Check if followed by a dot
+			if i < len(expr) && expr[i] == '.' {
+				i++ // skip dot
+				// Read the column name after the dot
+				colStart := i
+				for i < len(expr) && (unicode.IsLetter(rune(expr[i])) || unicode.IsDigit(rune(expr[i])) || expr[i] == '_' || expr[i] == '`') {
+					i++
+				}
+				if i > colStart {
+					colName := expr[colStart:i]
+					// Check it's not a number literal (e.g., 1.0)
+					if !isNumber(ident) {
+						refs = append(refs, ident+"."+colName)
+					}
+				}
+			}
+			continue
+		}
+		i++
+	}
+	return refs
+}
+
+// isNumber checks if a string is a numeric literal
+func isNumber(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, ch := range s {
+		if !unicode.IsDigit(ch) && ch != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// extractSubqueryColumns extracts column references from inside a (SELECT ... FROM ...) subquery
+func extractSubqueryColumns(expr string) []string {
+	// Find the innermost SELECT and extract column refs from it
+	upper := strings.ToUpper(expr)
+	selectIdx := strings.Index(upper, "(SELECT")
+	if selectIdx < 0 {
+		return nil
+	}
+
+	// Find the matching closing paren
+	start := selectIdx + 1
+	depth := 1
+	i := start
+	for i < len(expr) && depth > 0 {
+		if expr[i] == '(' {
+			depth++
+		} else if expr[i] == ')' {
+			depth--
+		}
+		i++
+	}
+	if depth != 0 {
+		return nil
+	}
+	inner := expr[start : i-1]
+
+	// Extract column refs from the inner SELECT
+	return extractAllColumnRefs(inner)
+}
+
 // isAggregateFunc checks if a function name is an aggregate function
 func isAggregateFunc(name string) bool {
 	switch name {
@@ -684,55 +1081,75 @@ func (p *CustomParser) parseWhereClause(t *tokenizer, aliasMap map[string]string
 		return nil, 0
 	}
 
-	whereStr := t.readUntilKeyword("GROUP", "ORDER", "LIMIT", "HAVING")
-	whereStr = strings.TrimSpace(whereStr)
-	if whereStr == "" {
+	whereTokens := t.collectUntilKeywords("GROUP", "ORDER", "LIMIT", "HAVING")
+	if len(whereTokens) == 0 {
 		return nil, 0
 	}
 
-	node, count := p.buildConditionTree(whereStr, aliasMap)
+	// Parse the WHERE expression using the expression parser
+	ep := NewExprParser(whereTokens, p.dialect)
+	expr, err := ep.ParseExpression()
+	if err != nil {
+		// Fallback: try string-based parsing
+		whereStr := joinTokens(whereTokens, 0, len(whereTokens))
+		whereStr = strings.TrimSpace(whereStr)
+		if whereStr == "" {
+			return nil, 0
+		}
+		node, count := p.buildConditionTreeFallback(whereStr, aliasMap)
+		return node, count
+	}
+
+	// Convert AST to ConditionNode tree
+	node := ExprToConditionTree(expr, aliasMap)
+	count := countConditions(node)
 	return node, count
 }
 
-func (p *CustomParser) buildConditionTree(whereStr string, aliasMap map[string]string) (*model.ConditionNode, int) {
+// countConditions counts the number of leaf CONDITION nodes in a tree.
+func countConditions(node *model.ConditionNode) int {
+	if node == nil {
+		return 0
+	}
+	if node.Type == "CONDITION" {
+		return 1
+	}
+	count := 0
+	for _, child := range node.Children {
+		count += countConditions(child)
+	}
+	return count
+}
+
+// buildConditionTreeFallback is the old string-based condition parser, used as fallback.
+func (p *CustomParser) buildConditionTreeFallback(whereStr string, aliasMap map[string]string) (*model.ConditionNode, int) {
 	whereStr = strings.TrimSpace(whereStr)
 	if whereStr == "" {
 		return nil, 0
 	}
-
-	// Remove outer parentheses if they wrap the entire expression
 	whereStr = unwrapOuterParens(whereStr)
-
-	// Split by AND/OR at the top level
 	parts, connectors := splitByLogicOp(whereStr)
-
 	if len(parts) == 1 {
-		// Single condition
 		cond := p.parseSingleCondition(parts[0], aliasMap)
 		return cond, 1
 	}
-
-	// Determine if this is AND or OR (use first connector)
 	firstConnector := "AND"
 	if len(connectors) > 0 && strings.ToUpper(connectors[0]) == "OR" {
 		firstConnector = "OR"
 	}
-
 	node := &model.ConditionNode{
 		ID:       utils.NewID("cond"),
 		Type:     firstConnector,
 		Children: make([]*model.ConditionNode, 0),
 	}
-
 	count := 0
 	for _, part := range parts {
-		child, c := p.buildConditionTree(part, aliasMap)
+		child, c := p.buildConditionTreeFallback(part, aliasMap)
 		if child != nil {
 			node.Children = append(node.Children, child)
 			count += c
 		}
 	}
-
 	return node, count
 }
 
@@ -982,16 +1399,21 @@ func parseJoinConditions(condStr string) []model.JoinCondition {
 	// Split by AND
 	parts, _ := splitByLogicOp(condStr)
 
+	// Operators ordered by length (longer first) to avoid partial matches
+	operators := []string{"!=", "<>", ">=", "<=", "=", ">", "<"}
+
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		// Look for = operator
-		eqIdx := findOpOutsideQuotes(part, "=")
-		if eqIdx > 0 {
-			conditions = append(conditions, model.JoinCondition{
-				Left:     strings.TrimSpace(part[:eqIdx]),
-				Operator: "=",
-				Right:    strings.TrimSpace(part[eqIdx+1:]),
-			})
+		for _, op := range operators {
+			idx := findOpOutsideQuotes(part, op)
+			if idx > 0 {
+				conditions = append(conditions, model.JoinCondition{
+					Left:     strings.TrimSpace(part[:idx]),
+					Operator: op,
+					Right:    strings.TrimSpace(part[idx+len(op):]),
+				})
+				break
+			}
 		}
 	}
 
@@ -1114,12 +1536,68 @@ func (p *CustomParser) parseOrderBy(t *tokenizer, aliasMap map[string]string) []
 }
 
 func (p *CustomParser) parseLimit(t *tokenizer) *model.LimitMeta {
+	// Handle SQL Server / PostgreSQL OFFSET...FETCH syntax
+	if t.pos < len(t.tokens) {
+		// Try to find OFFSET keyword for OFFSET...FETCH
+		savedPos := t.pos
+		if t.skipToKeyword("OFFSET") {
+			if t.pos < len(t.tokens) {
+				offsetVal := 0
+				fmt.Sscanf(t.tokens[t.pos].value, "%d", &offsetVal)
+				t.pos++
+				// Skip ROWS/ROW
+				if t.pos < len(t.tokens) {
+					upper := strings.ToUpper(t.tokens[t.pos].value)
+					if upper == "ROWS" || upper == "ROW" {
+						t.pos++
+					}
+				}
+				// Check for FETCH NEXT/LIMIT
+				if t.pos < len(t.tokens) {
+					upper := strings.ToUpper(t.tokens[t.pos].value)
+					if upper == "FETCH" {
+						t.pos++
+						if t.pos < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "NEXT" {
+							t.pos++
+						}
+						limitVal := 0
+						if t.pos < len(t.tokens) {
+							fmt.Sscanf(t.tokens[t.pos].value, "%d", &limitVal)
+							t.pos++
+						}
+						// Skip ROWS/ROW ONLY
+						if t.pos < len(t.tokens) {
+							upper := strings.ToUpper(t.tokens[t.pos].value)
+							if upper == "ROWS" || upper == "ROW" {
+								t.pos++
+							}
+						}
+						if t.pos < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "ONLY" {
+							t.pos++
+						}
+						return &model.LimitMeta{Limit: limitVal, Offset: offsetVal}
+					}
+				}
+				// OFFSET without FETCH
+				return &model.LimitMeta{Limit: 0, Offset: offsetVal}
+			}
+		}
+		t.pos = savedPos
+	}
+
+	// Standard LIMIT syntax (MySQL, PostgreSQL, SQLite)
 	if !t.skipToKeyword("LIMIT") {
 		return nil
 	}
 
 	if t.pos >= len(t.tokens) {
 		return nil
+	}
+
+	// Handle LIMIT ALL (PostgreSQL)
+	if strings.ToUpper(t.tokens[t.pos].value) == "ALL" {
+		t.pos++
+		return nil // no limit
 	}
 
 	limitVal := 0
@@ -1304,4 +1782,276 @@ func containsStr(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// parseCTEs parses WITH [RECURSIVE] cte_name AS (SELECT ...) [, ...] and returns
+// the CTE definitions plus the remaining tokens after the CTE clause.
+func (p *CustomParser) parseCTEs(tokens []token) ([]model.CTEDefinition, []token) {
+	if len(tokens) == 0 || strings.ToUpper(tokens[0].value) != "WITH" {
+		return nil, tokens
+	}
+
+	pos := 1
+	// Check for RECURSIVE
+	if pos < len(tokens) && strings.ToUpper(tokens[pos].value) == "RECURSIVE" {
+		pos++
+	}
+
+	var ctes []model.CTEDefinition
+	for {
+		if pos >= len(tokens) {
+			break
+		}
+
+		// CTE name
+		if tokens[pos].kind != tokenIdent && !isSQLKeyword(strings.ToUpper(tokens[pos].value)) {
+			break
+		}
+		cteName := stripBackticks(tokens[pos].value)
+		pos++
+
+		// Optional column list: cte(col1, col2)
+		var columns []string
+		if pos < len(tokens) && tokens[pos].value == "(" {
+			pos++ // skip (
+			for pos < len(tokens) && tokens[pos].value != ")" {
+				if tokens[pos].value != "," {
+					columns = append(columns, stripBackticks(tokens[pos].value))
+				}
+				pos++
+			}
+			if pos < len(tokens) {
+				pos++ // skip )
+			}
+		}
+
+		// AS keyword
+		if pos < len(tokens) && strings.ToUpper(tokens[pos].value) == "AS" {
+			pos++
+		}
+
+		// ( SELECT ... ) — find matching paren
+		if pos < len(tokens) && tokens[pos].value == "(" {
+			pos++ // skip (
+			depth := 1
+			bodyStart := pos
+			for pos < len(tokens) && depth > 0 {
+				if tokens[pos].value == "(" {
+					depth++
+				}
+				if tokens[pos].value == ")" {
+					depth--
+				}
+				if depth > 0 {
+					pos++
+				}
+			}
+			// tokens[bodyStart:pos] is the CTE body (without outer parens)
+			innerSQL := joinTokens(tokens, bodyStart, pos)
+			if pos < len(tokens) {
+				pos++ // skip closing )
+			}
+
+			ctes = append(ctes, model.CTEDefinition{
+				ID:      utils.NewID("cte"),
+				Name:    cteName,
+				Columns: columns,
+				RawSQL:  innerSQL,
+			})
+		}
+
+		// Check for comma (next CTE) or end
+		if pos < len(tokens) && tokens[pos].value == "," {
+			pos++
+			continue
+		}
+		break
+	}
+
+	return ctes, tokens[pos:]
+}
+
+// parseSetOperations checks for UNION/INTERSECT/EXCEPT after the main SELECT.
+func (p *CustomParser) parseSetOperations(tokens []token, firstResult *model.SQLAnalysisResult) []model.SetOperation {
+	// Find the position after the main SELECT statement
+	// We look for UNION/INTERSECT/EXCEPT at the top level (depth 0)
+	var ops []model.SetOperation
+	depth := 0
+	i := 0
+	for i < len(tokens) {
+		if tokens[i].value == "(" {
+			depth++
+		} else if tokens[i].value == ")" {
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth == 0 && tokens[i].kind == tokenKeyword {
+			upper := strings.ToUpper(tokens[i].value)
+			opType := ""
+			switch upper {
+			case "UNION":
+				opType = "UNION"
+				if i+1 < len(tokens) && strings.ToUpper(tokens[i+1].value) == "ALL" {
+					opType = "UNION ALL"
+				}
+			case "INTERSECT":
+				opType = "INTERSECT"
+			case "EXCEPT":
+				opType = "EXCEPT"
+			}
+			if opType != "" {
+				// Parse the right side
+				skipCount := 1
+				if opType == "UNION ALL" {
+					skipCount = 2
+				}
+				remaining := joinTokens(tokens, i+skipCount, len(tokens))
+				rightResult, err := p.Parse(remaining)
+				if err == nil {
+					ops = append(ops, model.SetOperation{
+						Type:  opType,
+						Left:  firstResult,
+						Right: rightResult,
+					})
+				}
+				break
+			}
+		}
+		i++
+	}
+	return ops
+}
+
+// parseInsert handles INSERT INTO table (columns) VALUES/subquery.
+func (p *CustomParser) parseInsert(sql string) (*model.SQLAnalysisResult, error) {
+	utils.ResetIDs()
+	result := &model.SQLAnalysisResult{
+		StatementType: "INSERT",
+		Dialect:       string(p.dialect.ID),
+		Risks:         make([]model.RiskMeta, 0),
+	}
+	tokens := tokenize(sql, p.dialect)
+	t := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+
+	// Skip INSERT [INTO]
+	t.skipToKeyword("INSERT")
+	if t.pos < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "INTO" {
+		t.pos++
+	}
+
+	// Parse table name
+	aliasMap := make(map[string]string)
+	tableAliasMap := make(map[string]string)
+	table, err := p.parseTableRef(t, aliasMap, tableAliasMap)
+	if err != nil {
+		return nil, fmt.Errorf("parse INSERT table error: %w", err)
+	}
+	table.Role = "main"
+	result.Tables = []model.TableMeta{*table}
+
+	// Parse column list if present
+	if t.pos < len(t.tokens) && t.tokens[t.pos].value == "(" {
+		t.pos++ // skip (
+		for t.pos < len(t.tokens) && t.tokens[t.pos].value != ")" {
+			if t.tokens[t.pos].kind == tokenIdent {
+				col := stripBackticks(t.tokens[t.pos].value)
+				result.Fields = append(result.Fields, model.FieldMeta{
+					ID:           utils.NewID("field"),
+					OutputName:   col,
+					SourceColumn: col,
+					SourceTable:  table.Name,
+					FieldType:    "column",
+				})
+			}
+			t.pos++
+			if t.pos < len(t.tokens) && t.tokens[t.pos].value == "," {
+				t.pos++
+			}
+		}
+		if t.pos < len(t.tokens) {
+			t.pos++ // skip )
+		}
+	}
+
+	result.Summary = model.SQLSummary{TableCount: 1}
+	result.Graph = p.buildGraph(result.Tables, result.Joins)
+	return result, nil
+}
+
+// parseUpdate handles UPDATE table SET assignments WHERE conditions.
+func (p *CustomParser) parseUpdate(sql string) (*model.SQLAnalysisResult, error) {
+	utils.ResetIDs()
+	result := &model.SQLAnalysisResult{
+		StatementType: "UPDATE",
+		Dialect:       string(p.dialect.ID),
+		Risks:         make([]model.RiskMeta, 0),
+	}
+	tokens := tokenize(sql, p.dialect)
+	t := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+
+	// Skip UPDATE
+	t.skipToKeyword("UPDATE")
+
+	// Parse table name
+	aliasMap := make(map[string]string)
+	tableAliasMap := make(map[string]string)
+	table, err := p.parseTableRef(t, aliasMap, tableAliasMap)
+	if err != nil {
+		return nil, fmt.Errorf("parse UPDATE table error: %w", err)
+	}
+	table.Role = "main"
+	result.Tables = []model.TableMeta{*table}
+
+	// Parse WHERE clause
+	t3 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	whereTree, whereCount := p.parseWhereClause(t3, aliasMap)
+	result.WhereTree = whereTree
+
+	result.Summary = model.SQLSummary{
+		TableCount: 1,
+		WhereCount: whereCount,
+	}
+	result.Graph = p.buildGraph(result.Tables, result.Joins)
+	return result, nil
+}
+
+// parseDelete handles DELETE FROM table WHERE conditions.
+func (p *CustomParser) parseDelete(sql string) (*model.SQLAnalysisResult, error) {
+	utils.ResetIDs()
+	result := &model.SQLAnalysisResult{
+		StatementType: "DELETE",
+		Dialect:       string(p.dialect.ID),
+		Risks:         make([]model.RiskMeta, 0),
+	}
+	tokens := tokenize(sql, p.dialect)
+	t := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+
+	// Skip DELETE FROM
+	t.skipToKeyword("DELETE")
+	if t.pos < len(t.tokens) && strings.ToUpper(t.tokens[t.pos].value) == "FROM" {
+		t.pos++
+	}
+
+	// Parse table name
+	aliasMap := make(map[string]string)
+	tableAliasMap := make(map[string]string)
+	table, err := p.parseTableRef(t, aliasMap, tableAliasMap)
+	if err != nil {
+		return nil, fmt.Errorf("parse DELETE table error: %w", err)
+	}
+	table.Role = "main"
+	result.Tables = []model.TableMeta{*table}
+
+	// Parse WHERE clause
+	t3 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	whereTree, whereCount := p.parseWhereClause(t3, aliasMap)
+	result.WhereTree = whereTree
+
+	result.Summary = model.SQLSummary{
+		TableCount: 1,
+		WhereCount: whereCount,
+	}
+	result.Graph = p.buildGraph(result.Tables, result.Joins)
+	return result, nil
 }

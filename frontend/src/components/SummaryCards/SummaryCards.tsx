@@ -45,9 +45,9 @@ export default function SummaryCards() {
             <div className={`sql-lens-summary-card-icon ${item.className}`}>{item.icon}</div>
             <div className="sql-lens-summary-card-info">
               <span className="sql-lens-summary-card-value">
-                {item.isString ? item.value : item.value}
+                {item.value}
                 {item.unit && (
-                  <span style={{ fontSize: 12, fontWeight: 400, color: '#999', marginLeft: 2 }}>
+                  <span className="sql-lens-summary-card-unit">
                     {item.unit}
                   </span>
                 )}

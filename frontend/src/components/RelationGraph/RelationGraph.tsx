@@ -21,28 +21,34 @@ function RelationGraphInner() {
   const { nodes, edges } = useMemo(() => {
     if (!result?.graph) return { nodes: [], edges: [] }
 
-    const flowNodes = (result.graph.nodes || []).map((n: GraphNode) => ({
-      id: n.id,
-      type: n.type || 'tableNode',
-      position: n.position || { x: 0, y: 0 },
-      data: {
-        tableName: (n.data as Record<string, unknown>).tableName || '',
-        alias: (n.data as Record<string, unknown>).alias || '',
-        role: (n.data as Record<string, unknown>).role || '',
-        selectedFields: (n.data as Record<string, unknown>).selectedFields || [],
-        filterFields: (n.data as Record<string, unknown>).filterFields || [],
-        joinFields: (n.data as Record<string, unknown>).joinFields || [],
-      },
-    }))
+    const flowNodes = (result.graph.nodes || []).map((n: GraphNode) => {
+      const d = (n.data || {}) as Record<string, unknown>
+      return {
+        id: n.id,
+        type: n.type || 'tableNode',
+        position: n.position || { x: 0, y: 0 },
+        data: {
+          tableName: d.tableName || '',
+          alias: d.alias || '',
+          role: d.role || '',
+          selectedFields: Array.isArray(d.selectedFields) ? d.selectedFields : [],
+          filterFields: Array.isArray(d.filterFields) ? d.filterFields : [],
+          joinFields: Array.isArray(d.joinFields) ? d.joinFields : [],
+        },
+      }
+    })
 
-    const flowEdges = (result.graph.edges || []).map((e: GraphEdge) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      type: e.type || 'joinEdge',
-      label: e.label || '',
-      data: e.data || {},
-    }))
+    const nodeIds = new Set(flowNodes.map((n) => n.id))
+    const flowEdges = (result.graph.edges || [])
+      .filter((e: GraphEdge) => e.source && e.target && nodeIds.has(e.source) && nodeIds.has(e.target))
+      .map((e: GraphEdge) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        type: e.type || 'joinEdge',
+        label: e.label || '',
+        data: e.data || {},
+      }))
 
     return { nodes: flowNodes, edges: flowEdges }
   }, [result])

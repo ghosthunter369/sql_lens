@@ -49,7 +49,7 @@ export default function RiskPanel() {
       {result.risks.map((risk: RiskMeta) => {
         const config = levelConfig[risk.level] || levelConfig.info
         return (
-          <div key={risk.type + risk.message} className={`risk-card ${risk.level}`} style={{ borderLeftColor: config.borderColor }}>
+          <div key={risk.id} className={`risk-card ${risk.level}`} style={{ borderLeftColor: config.borderColor }}>
             <div className="risk-card-header">
               <span className="risk-card-icon">{config.icon}</span>
               <Tag color={config.tagColor} style={{ fontWeight: 600 }}>{riskTypeLabels[risk.type] || risk.type}</Tag>

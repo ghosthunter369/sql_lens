@@ -43,6 +43,9 @@ func BuildMarkdownReport(result *model.SQLAnalysisResult) string {
 	b.WriteString(fmt.Sprintf("| 是否有 GROUP BY | %s |\n", boolToStr(result.Summary.HasGroupBy)))
 	b.WriteString(fmt.Sprintf("| 是否有 ORDER BY | %s |\n", boolToStr(result.Summary.HasOrderBy)))
 	b.WriteString(fmt.Sprintf("| 是否有 LIMIT | %s |\n", boolToStr(result.Summary.HasLimit)))
+	b.WriteString(fmt.Sprintf("| 是否有窗口函数 | %s |\n", boolToStr(result.Summary.HasWindowFunc)))
+	b.WriteString(fmt.Sprintf("| 是否有 CTE | %s |\n", boolToStr(result.Summary.HasCTE)))
+	b.WriteString(fmt.Sprintf("| 是否有 UNION | %s |\n", boolToStr(result.Summary.HasUnion)))
 	b.WriteString(fmt.Sprintf("| 复杂度 | %s |\n\n", complexityLabel(result.Summary.Complexity)))
 
 	// Tables
@@ -66,17 +69,49 @@ func BuildMarkdownReport(result *model.SQLAnalysisResult) string {
 		b.WriteString("\n")
 	}
 
+	// CTE definitions
+	if len(result.CTEs) > 0 {
+		b.WriteString("## CTE 定义\n\n")
+		for _, cte := range result.CTEs {
+			b.WriteString(fmt.Sprintf("### %s\n\n", cte.Name))
+			if len(cte.Columns) > 0 {
+				b.WriteString(fmt.Sprintf("列: %s\n\n", strings.Join(cte.Columns, ", ")))
+			}
+			b.WriteString("```sql\n")
+			b.WriteString(cte.RawSQL)
+			b.WriteString("\n```\n\n")
+		}
+	}
+
+	// Set operations
+	if len(result.SetOperations) > 0 {
+		b.WriteString("## 集合操作\n\n")
+		for _, op := range result.SetOperations {
+			b.WriteString(fmt.Sprintf("- %s\n", op.Type))
+		}
+		b.WriteString("\n")
+	}
+
 	// Fields
 	b.WriteString("## 查询字段\n\n")
 	if len(result.Fields) == 0 {
 		b.WriteString("无查询字段\n\n")
 	} else {
-		b.WriteString("| 输出字段 | 来源表 | 表达式 | 类型 |\n")
-		b.WriteString("|---|---|---|---|\n")
+		b.WriteString("| 输出字段 | 来源表 | 表达式 | 类型 | 函数分类 |\n")
+		b.WriteString("|---|---|---|---|---|\n")
 		for _, field := range result.Fields {
 			sourceTable := orNA(field.SourceTable)
-			b.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
-				field.OutputName, sourceTable, field.Expression, fieldTypeLabel(field.FieldType)))
+			funcCat := orNA(field.FuncCategory)
+			windowInfo := ""
+			if field.WindowSpec != nil {
+				windowInfo = " [窗口函数"
+				if len(field.WindowSpec.PartitionBy) > 0 {
+					windowInfo += ", PARTITION BY " + strings.Join(field.WindowSpec.PartitionBy, ", ")
+				}
+				windowInfo += "]"
+			}
+			b.WriteString(fmt.Sprintf("| %s | %s | %s%s | %s | %s |\n",
+				field.OutputName, sourceTable, field.Expression, windowInfo, fieldTypeLabel(field.FieldType), funcCat))
 		}
 		b.WriteString("\n")
 	}
@@ -224,6 +259,8 @@ func fieldTypeLabel(ft string) string {
 		return "通配字段"
 	case "subquery":
 		return "子查询字段"
+	case "window":
+		return "窗口函数"
 	default:
 		return ft
 	}

@@ -5,13 +5,17 @@ import {
   FilterOutlined,
   LinkOutlined,
   AlertOutlined,
+  SortAscendingOutlined,
+  NodeIndexOutlined,
 } from '@ant-design/icons'
 import { useSqlStore } from '@/store/useSqlStore'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import RelationGraph from '@/components/RelationGraph/RelationGraph'
 import FieldTable from '@/components/FieldTable/FieldTable'
 import WhereTree from '@/components/WhereTree/WhereTree'
 import JoinDetail from '@/components/JoinDetail/JoinDetail'
 import RiskPanel from '@/components/RiskPanel/RiskPanel'
+import ClauseDetail from '@/components/ClauseDetail/ClauseDetail'
 
 export default function ResultTabs() {
   const result = useSqlStore((s) => s.result)
@@ -27,7 +31,7 @@ export default function ResultTabs() {
           <span>表关系图</span>
         </span>
       ),
-      children: <RelationGraph />,
+      children: <ErrorBoundary><RelationGraph /></ErrorBoundary>,
     },
     {
       key: 'fields',
@@ -38,7 +42,7 @@ export default function ResultTabs() {
           <Badge count={result.fields.length} size="small" style={{ backgroundColor: '#1677ff' }} overflowCount={999} />
         </span>
       ),
-      children: <FieldTable />,
+      children: <ErrorBoundary><FieldTable /></ErrorBoundary>,
     },
     {
       key: 'where',
@@ -48,7 +52,7 @@ export default function ResultTabs() {
           <span>WHERE 条件</span>
         </span>
       ),
-      children: <WhereTree />,
+      children: <ErrorBoundary><WhereTree /></ErrorBoundary>,
     },
     {
       key: 'joins',
@@ -59,7 +63,17 @@ export default function ResultTabs() {
           <Badge count={result.joins.length} size="small" style={{ backgroundColor: '#52c41a' }} overflowCount={99} />
         </span>
       ),
-      children: <JoinDetail />,
+      children: <ErrorBoundary><JoinDetail /></ErrorBoundary>,
+    },
+    {
+      key: 'clauses',
+      label: (
+        <span className="tab-label">
+          <SortAscendingOutlined />
+          <span>排序与分组</span>
+        </span>
+      ),
+      children: <ErrorBoundary><ClauseDetail /></ErrorBoundary>,
     },
     {
       key: 'risks',
@@ -72,8 +86,47 @@ export default function ResultTabs() {
           )}
         </span>
       ),
-      children: <RiskPanel />,
+      children: <ErrorBoundary><RiskPanel /></ErrorBoundary>,
     },
+    ...(result.ctes && result.ctes.length > 0 ? [{
+      key: 'ctes',
+      label: (
+        <span className="tab-label">
+          <NodeIndexOutlined />
+          <span>CTE</span>
+          <Badge count={result.ctes.length} size="small" style={{ backgroundColor: '#722ed1' }} />
+        </span>
+      ),
+      children: (
+        <ErrorBoundary>
+          <div style={{ padding: 12 }}>
+            {result.ctes.map((cte) => (
+              <div key={cte.id} style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4, color: '#722ed1' }}>
+                  {cte.name}
+                  {cte.columns && cte.columns.length > 0 && (
+                    <span style={{ fontWeight: 400, color: '#666', marginLeft: 8 }}>
+                      ({cte.columns.join(', ')})
+                    </span>
+                  )}
+                </div>
+                <pre style={{
+                  background: '#f5f5f5',
+                  padding: 8,
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontFamily: 'var(--font-mono)',
+                  overflow: 'auto',
+                  maxHeight: 200,
+                }}>
+                  {cte.rawSql}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </ErrorBoundary>
+      ),
+    }] : []),
   ]
 
   return (

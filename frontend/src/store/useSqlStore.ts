@@ -15,6 +15,7 @@ export interface SqlState {
   setLogType: (logType: LogType) => void
   parseSql: () => Promise<void>
   setResult: (result: SQLAnalysisResult | undefined) => void
+  clearError: () => void
   clear: () => void
 }
 
@@ -64,6 +65,8 @@ export const useSqlStore = create<SqlState>((set, get) => ({
   },
 
   setResult: (result) => set({ result }),
+
+  clearError: () => set({ error: undefined }),
 
   clear: () =>
     set({

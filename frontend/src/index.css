@@ -49,6 +49,10 @@ body {
 }
 
 /* === Scrollbar === */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
@@ -244,6 +248,27 @@ body {
   font-size: 11px;
   color: var(--color-text-muted);
   font-weight: 500;
+}
+
+.sql-lens-summary-card-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  margin-left: 2px;
+}
+
+/* ============================
+   LOADING STATE
+   ============================ */
+.sql-lens-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--color-text-muted);
+  font-size: 14px;
 }
 
 /* ============================
@@ -609,6 +634,68 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ============================
+   CLAUSE DETAIL (GROUP BY / ORDER BY / LIMIT)
+   ============================ */
+.clause-detail-wrapper {
+  padding: 0 2px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.clause-section {
+  margin-bottom: 20px;
+}
+
+.clause-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 10px;
+}
+
+.clause-expr {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: #374151;
+}
+
+.clause-limit-info {
+  display: flex;
+  gap: 20px;
+}
+
+.clause-limit-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+}
+
+.clause-limit-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.clause-limit-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+  font-family: var(--font-mono);
 }
 
 /* ============================
