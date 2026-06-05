@@ -8,3 +8,4 @@ CLAUDE.md
 code
 *.exe
 *.exe~
+.vercel
