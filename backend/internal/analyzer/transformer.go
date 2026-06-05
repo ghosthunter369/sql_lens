@@ -3,7 +3,6 @@ package analyzer
 import (
 	"regexp"
 	"strings"
-
 	"sql-lens/internal/model"
 )
 
@@ -15,83 +14,14 @@ func NewASTTransformer() *ASTTransformer {
 }
 
 func (tr *ASTTransformer) Transform(result *model.SQLAnalysisResult) (*model.SQLAnalysisResult, error) {
-	// Table field usage is now populated by parser.populateTableFields
-
 	if result.FormattedSQL == "" && result.RestoredSQL != "" {
-		result.FormattedSQL = formatSQL(result.RestoredSQL)
+		result.FormattedSQL = FormatSQL(result.RestoredSQL)
 	}
-
 	return result, nil
 }
 
-func (tr *ASTTransformer) enrichTableFieldUsage(result *model.SQLAnalysisResult) {
-	tableMap := make(map[string]*model.TableMeta)
-	for i := range result.Tables {
-		tableMap[result.Tables[i].Name] = &result.Tables[i]
-		if result.Tables[i].Alias != "" {
-			tableMap[result.Tables[i].Alias] = &result.Tables[i]
-		}
-	}
-
-	// Track selected fields per table
-	for _, field := range result.Fields {
-		if field.SourceTable != "" {
-			if t, ok := tableMap[field.SourceTable]; ok {
-				t.SelectedFields = append(t.SelectedFields, field.OutputName)
-			}
-		}
-		if field.SourceAlias != "" {
-			if t, ok := tableMap[field.SourceAlias]; ok {
-				if !containsStr(t.SelectedFields, field.OutputName) {
-					t.SelectedFields = append(t.SelectedFields, field.OutputName)
-				}
-			}
-		}
-	}
-
-	// Track filter fields per table (from WHERE)
-	if result.WhereTree != nil {
-		collectWhereTables(result.WhereTree, tableMap)
-	}
-
-	// Track join fields per table
-	for _, join := range result.Joins {
-		for _, cond := range join.Conditions {
-			if t, ok := tableMap[join.LeftTable]; ok {
-				t.JoinFields = append(t.JoinFields, cond.Left, cond.Right)
-			}
-			if t, ok := tableMap[join.RightTable]; ok {
-				t.JoinFields = append(t.JoinFields, cond.Left, cond.Right)
-			}
-		}
-	}
-}
-
-func collectWhereTables(node *model.ConditionNode, tableMap map[string]*model.TableMeta) {
-	if node == nil {
-		return
-	}
-	if node.Type == "CONDITION" && node.Table != "" {
-		if t, ok := tableMap[node.Table]; ok {
-			t.FilterFields = append(t.FilterFields, node.Field)
-		}
-	}
-	for _, child := range node.Children {
-		collectWhereTables(child, tableMap)
-	}
-}
-
-func containsStr(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-// formatSQL does simple SQL keyword capitalization and indentation
-func formatSQL(sql string) string {
+// FormatSQL does simple SQL keyword capitalization and indentation.
+func FormatSQL(sql string) string {
 	if sql == "" {
 		return ""
 	}

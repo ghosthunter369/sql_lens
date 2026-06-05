@@ -1,11 +1,13 @@
 import { useRef } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { useSqlStore } from '@/store/useSqlStore'
+import { formatSQL } from '@/utils/format'
 
 export default function SqlEditor() {
   const rawText = useSqlStore((s) => s.rawText)
   const setRawText = useSqlStore((s) => s.setRawText)
   const parseSql = useSqlStore((s) => s.parseSql)
+  const dialect = useSqlStore((s) => s.dialect)
   const holderRef = useRef<HTMLDivElement>(null)
 
   const handleMount: OnMount = (editor, monaco) => {
@@ -20,7 +22,11 @@ export default function SqlEditor() {
       label: 'Format SQL',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
       run: () => {
-        editor.getAction('editor.action.formatDocument')?.run()
+        const currentText = editor.getValue()
+        if (currentText.trim()) {
+          const formatted = formatSQL(currentText, dialect)
+          editor.setValue(formatted)
+        }
       },
     })
   }

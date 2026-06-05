@@ -11,6 +11,7 @@ type SQLAnalysisResult struct {
 	Joins         []JoinMeta      `json:"joins"`
 	Fields        []FieldMeta     `json:"fields"`
 	WhereTree     *ConditionNode  `json:"whereTree,omitempty"`
+	HavingTree    *ConditionNode  `json:"havingTree,omitempty"`
 	GroupBy       []GroupByMeta   `json:"groupBy"`
 	OrderBy       []OrderByMeta   `json:"orderBy"`
 	Limit         *LimitMeta      `json:"limit,omitempty"`
@@ -25,9 +26,11 @@ type SQLSummary struct {
 	JoinCount     int    `json:"joinCount"`
 	FieldCount    int    `json:"fieldCount"`
 	WhereCount    int    `json:"whereCount"`
+	HavingCount   int    `json:"havingCount"`
 	HasGroupBy    bool   `json:"hasGroupBy"`
 	HasOrderBy    bool   `json:"hasOrderBy"`
 	HasLimit      bool   `json:"hasLimit"`
+	HasHaving     bool   `json:"hasHaving"`
 	Complexity    string `json:"complexity"`
 	HasWindowFunc bool   `json:"hasWindowFunc"`
 	HasCTE        bool   `json:"hasCTE"`

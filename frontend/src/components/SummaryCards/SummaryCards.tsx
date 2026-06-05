@@ -5,7 +5,12 @@ import {
   FilterOutlined,
   ApartmentOutlined,
   ThunderboltOutlined,
+  NodeIndexOutlined,
+  FunctionOutlined,
+  MergeCellsOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
+import { Tag } from 'antd'
 import { useSqlStore } from '@/store/useSqlStore'
 
 const complexityInfo: Record<string, { icon: React.ReactNode; label: string; className: string }> = {
@@ -37,6 +42,21 @@ export default function SummaryCards() {
     },
   ]
 
+  // Feature tags
+  const featureTags = []
+  if (summary.hasCTE) {
+    featureTags.push({ label: 'CTE', color: '#722ed1', icon: <NodeIndexOutlined /> })
+  }
+  if (summary.hasWindowFunc) {
+    featureTags.push({ label: '窗口函数', color: '#1677ff', icon: <FunctionOutlined /> })
+  }
+  if (summary.hasUnion) {
+    featureTags.push({ label: 'UNION', color: '#13c2c2', icon: <MergeCellsOutlined /> })
+  }
+  if (summary.hasHaving) {
+    featureTags.push({ label: 'HAVING', color: '#fa8c16', icon: <FileTextOutlined /> })
+  }
+
   return (
     <div className="sql-lens-summary">
       <div className="sql-lens-summary-grid">
@@ -57,6 +77,15 @@ export default function SummaryCards() {
           </div>
         ))}
       </div>
+      {featureTags.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {featureTags.map((tag, i) => (
+            <Tag key={i} color={tag.color} icon={tag.icon} style={{ borderRadius: 4, fontSize: 11 }}>
+              {tag.label}
+            </Tag>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -1,23 +1,47 @@
-import { Table, Tag, Empty } from 'antd'
+import { Table, Tag, Empty, Tree } from 'antd'
+import type { DataNode } from 'antd/es/tree'
 import {
   SortAscendingOutlined,
   GroupOutlined,
   ColumnWidthOutlined,
+  FilterOutlined,
 } from '@ant-design/icons'
 import { useSqlStore } from '@/store/useSqlStore'
-import type { GroupByMeta, OrderByMeta } from '@/types/sql'
+import type { GroupByMeta, OrderByMeta, ConditionNode } from '@/types/sql'
+
+function buildHavingTreeNodes(node: ConditionNode): DataNode {
+  if (node.type === 'CONDITION') {
+    return {
+      key: node.id,
+      title: <code style={{ fontSize: 12 }}>{node.expr}</code>,
+      isLeaf: true,
+      selectable: false,
+    }
+  }
+  const isAnd = node.type === 'AND'
+  return {
+    key: node.id,
+    title: (
+      <span className={`where-logic-tag ${isAnd ? 'and' : 'or'}`}>
+        {node.type}
+      </span>
+    ),
+    children: (node.children || []).map(buildHavingTreeNodes),
+    selectable: false,
+  }
+}
 
 export default function ClauseDetail() {
   const result = useSqlStore((s) => s.result)
   if (!result) return null
 
-  const { groupBy, orderBy, limit } = result
-  const hasContent = groupBy.length > 0 || orderBy.length > 0 || !!limit
+  const { groupBy, orderBy, limit, havingTree } = result
+  const hasContent = groupBy.length > 0 || orderBy.length > 0 || !!limit || !!havingTree
 
   if (!hasContent) {
     return (
       <div className="tab-empty-state">
-        <Empty description="当前 SQL 没有 GROUP BY / ORDER BY / LIMIT 子句" />
+        <Empty description="当前 SQL 没有 GROUP BY / ORDER BY / LIMIT / HAVING 子句" />
       </div>
     )
   }
@@ -55,6 +79,21 @@ export default function ClauseDetail() {
         </div>
       )}
 
+      {havingTree && (
+        <div className="clause-section">
+          <div className="clause-section-title">
+            <FilterOutlined />
+            <span>HAVING</span>
+          </div>
+          <Tree
+            treeData={[buildHavingTreeNodes(havingTree)]}
+            defaultExpandAll
+            showLine={{ showLeafIcon: false }}
+            style={{ fontSize: 13 }}
+          />
+        </div>
+      )}
+
       {orderBy.length > 0 && (
         <div className="clause-section">
           <div className="clause-section-title">
@@ -80,7 +119,7 @@ export default function ClauseDetail() {
                 key: 'direction',
                 width: 80,
                 render: (dir: string) => (
-                  <Tag color={dir === 'DESC' ? 'red' : 'blue'}>{dir}</Tag>
+                  <Tag color={dir.toUpperCase() === 'DESC' ? 'red' : 'blue'}>{dir}</Tag>
                 ),
               },
               {

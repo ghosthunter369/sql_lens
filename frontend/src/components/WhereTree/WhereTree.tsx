@@ -23,10 +23,13 @@ function buildTreeNodes(node: ConditionNode): DataNode {
   }
 
   const isAnd = node.type === 'AND'
+  const isNot = node.type === 'NOT'
+  const className = isNot ? 'where-logic-tag not' : isAnd ? 'where-logic-tag and' : 'where-logic-tag or'
+
   return {
     key: node.id,
     title: (
-      <span className={`where-logic-tag ${isAnd ? 'and' : 'or'}`}>
+      <span className={className}>
         {node.type}
       </span>
     ),

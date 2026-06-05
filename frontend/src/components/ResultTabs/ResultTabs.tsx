@@ -7,6 +7,7 @@ import {
   AlertOutlined,
   SortAscendingOutlined,
   NodeIndexOutlined,
+  MergeCellsOutlined,
 } from '@ant-design/icons'
 import { useSqlStore } from '@/store/useSqlStore'
 import ErrorBoundary from '@/components/ErrorBoundary'
@@ -121,6 +122,59 @@ export default function ResultTabs() {
                 }}>
                   {cte.rawSql}
                 </pre>
+              </div>
+            ))}
+          </div>
+        </ErrorBoundary>
+      ),
+    }] : []),
+    ...(result.setOperations && result.setOperations.length > 0 ? [{
+      key: 'set-ops',
+      label: (
+        <span className="tab-label">
+          <MergeCellsOutlined />
+          <span>集合操作</span>
+          <Badge count={result.setOperations.length} size="small" style={{ backgroundColor: '#13c2c2' }} />
+        </span>
+      ),
+      children: (
+        <ErrorBoundary>
+          <div style={{ padding: 12 }}>
+            {result.setOperations.map((op, idx) => (
+              <div key={idx} style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8, color: '#13c2c2', fontSize: 14 }}>
+                  {op.type}
+                </div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>左侧查询</div>
+                    <pre style={{
+                      background: '#f5f5f5',
+                      padding: 8,
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontFamily: 'var(--font-mono)',
+                      overflow: 'auto',
+                      maxHeight: 150,
+                    }}>
+                      {op.left?.rawSql || '(无数据)'}
+                    </pre>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>右侧查询</div>
+                    <pre style={{
+                      background: '#f5f5f5',
+                      padding: 8,
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontFamily: 'var(--font-mono)',
+                      overflow: 'auto',
+                      maxHeight: 150,
+                    }}>
+                      {op.right?.rawSql || '(无数据)'}
+                    </pre>
+                  </div>
+                </div>
               </div>
             ))}
           </div>

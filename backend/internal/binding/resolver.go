@@ -3,6 +3,7 @@ package binding
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -37,6 +38,27 @@ func formatBinding(value interface{}) string {
 
 	switch v := value.(type) {
 	case string:
+		// Try to detect numeric strings and booleans
+		if v == "" {
+			return "''"
+		}
+		// Check if it's a numeric value (int or float)
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			// Check if it's an integer
+			if f == float64(int64(f)) {
+				return fmt.Sprintf("%d", int64(f))
+			}
+			return fmt.Sprintf("%v", f)
+		}
+		// Check if it's a boolean
+		upper := strings.ToUpper(v)
+		if upper == "TRUE" {
+			return "1"
+		}
+		if upper == "FALSE" {
+			return "0"
+		}
+		// It's a string value
 		escaped := strings.ReplaceAll(v, "'", "''")
 		return "'" + escaped + "'"
 	case bool:
@@ -44,8 +66,17 @@ func formatBinding(value interface{}) string {
 			return "1"
 		}
 		return "0"
+	case int:
+		return fmt.Sprintf("%d", v)
+	case int64:
+		return fmt.Sprintf("%d", v)
 	case float64:
 		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%v", v)
+	case float32:
+		if float64(v) == float64(int64(v)) {
 			return fmt.Sprintf("%d", int64(v))
 		}
 		return fmt.Sprintf("%v", v)

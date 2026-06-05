@@ -102,6 +102,10 @@ func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 	t4 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	groupBy := p.parseGroupBy(t4, aliasMap)
 
+	// Reuse token array for HAVING
+	t4b := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	havingTree, havingCount := p.parseHaving(t4b, aliasMap)
+
 	// Reuse token array for ORDER BY
 	t5 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	orderBy := p.parseOrderBy(t5, aliasMap)
@@ -120,6 +124,7 @@ func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 	result.Joins = joins
 	result.Fields = fields
 	result.WhereTree = whereTree
+	result.HavingTree = havingTree
 	result.GroupBy = groupBy
 	result.OrderBy = orderBy
 	result.Limit = limit
@@ -174,9 +179,11 @@ func (p *CustomParser) Parse(sql string) (*model.SQLAnalysisResult, error) {
 		JoinCount:     len(joins),
 		FieldCount:    len(fields),
 		WhereCount:    whereCount,
+		HavingCount:   havingCount,
 		HasGroupBy:    len(groupBy) > 0,
 		HasOrderBy:    len(orderBy) > 0,
 		HasLimit:      limit != nil,
+		HasHaving:     havingCount > 0,
 		Complexity:    p.calculateComplexity(len(joins), whereCount, len(groupBy), len(orderBy), sql),
 		HasWindowFunc: hasWindowFunc,
 		HasCTE:        len(ctes) > 0,
@@ -783,278 +790,6 @@ func isSimpleColumn(expr string) bool {
 	return true
 }
 
-// extractFunctionName returns the function name and whether this is a function call
-func extractFunctionName(expr string) (string, bool) {
-	expr = strings.TrimSpace(expr)
-	// Find first opening paren
-	parenIdx := strings.Index(expr, "(")
-	if parenIdx <= 0 {
-		return "", false
-	}
-	// Walk back from paren to get function name
-	name := strings.TrimSpace(expr[:parenIdx])
-	name = strings.ToUpper(name)
-
-	// If name contains spaces, it's likely not a simple function call
-	// (could be "CASE WHEN" or other constructs)
-	if strings.Contains(name, " ") {
-		// Check for CASE WHEN pattern
-		if strings.HasPrefix(name, "CASE") {
-			return "CASE", true
-		}
-		return "", false
-	}
-
-	return name, true
-}
-
-// extractFirstColumn extracts the first column reference from a function's arguments
-func extractFirstColumn(expr string) string {
-	// Find the content inside the outermost parentheses
-	start := strings.Index(expr, "(")
-	if start < 0 {
-		return ""
-	}
-	start++
-	depth := 1
-	end := start
-	for end < len(expr) {
-		ch := expr[end]
-		if ch == '(' {
-			depth++
-		} else if ch == ')' {
-			depth--
-			if depth == 0 {
-				break
-			}
-		}
-		end++
-	}
-
-	if end >= len(expr) {
-		return ""
-	}
-
-	inner := strings.TrimSpace(expr[start:end])
-
-	// For CASE WHEN, extract differently
-	upper := strings.ToUpper(expr)
-	if strings.Contains(upper, "CASE") {
-		return extractFromCaseWhen(inner)
-	}
-
-	// Split arguments by top-level commas, take first
-	firstArg := splitFirstArg(inner)
-
-	// If first arg contains a dot, return it
-	firstArg = strings.TrimSpace(firstArg)
-	if dotIdx := strings.Index(firstArg, "."); dotIdx > 0 {
-		return firstArg
-	}
-
-	// If it looks like a column name (no spaces, no parens), return it
-	if isSimpleColumn(firstArg) {
-		return firstArg
-	}
-
-	return ""
-}
-
-// splitFirstArg splits on the first top-level comma
-func splitFirstArg(s string) string {
-	depth := 0
-	inQuote := false
-	var qc byte
-	for i, ch := range s {
-		if ch == '\'' || ch == '"' {
-			if !inQuote {
-				inQuote = true
-				qc = byte(ch)
-			} else if byte(ch) == qc {
-				inQuote = false
-			}
-			continue
-		}
-		if inQuote {
-			continue
-		}
-		if ch == '(' {
-			depth++
-		} else if ch == ')' {
-			if depth > 0 {
-				depth--
-			}
-		}
-		if ch == ',' && depth == 0 {
-			return strings.TrimSpace(s[:i])
-		}
-	}
-	return strings.TrimSpace(s)
-}
-
-func extractFromCaseWhen(inner string) string {
-	upper := strings.ToUpper(inner)
-	// CASE column WHEN ... or CASE WHEN column = ...
-	whenIdx := strings.Index(upper, "WHEN")
-	if whenIdx < 0 {
-		return ""
-	}
-	afterWhen := strings.TrimSpace(inner[whenIdx+4:])
-	// If "WHEN column", return the first word
-	if dotIdx := strings.Index(afterWhen, "."); dotIdx > 0 {
-		// Has table.column
-		parts := strings.Fields(afterWhen)
-		if len(parts) > 0 && strings.Contains(parts[0], ".") {
-			return parts[0]
-		}
-	}
-	return ""
-}
-
-// extractAllColumnRefs finds all table.column references in an expression
-func extractAllColumnRefs(expr string) []string {
-	var refs []string
-	upper := strings.ToUpper(expr)
-	depth := 0
-	inQuote := false
-	var quoteChar byte
-	i := 0
-
-	for i < len(expr) {
-		ch := expr[i]
-		if ch == '\'' || ch == '"' {
-			if !inQuote {
-				inQuote = true
-				quoteChar = ch
-			} else if ch == quoteChar {
-				inQuote = false
-			}
-			i++
-			continue
-		}
-		if inQuote {
-			i++
-			continue
-		}
-		if ch == '(' {
-			depth++
-			i++
-			continue
-		} else if ch == ')' {
-			if depth > 0 {
-				depth--
-			}
-			i++
-			continue
-		}
-
-		// Skip SQL keywords
-		if depth == 0 && i+4 <= len(upper) {
-			wordEnd := i
-			for wordEnd < len(expr) && (unicode.IsLetter(rune(expr[wordEnd])) || expr[wordEnd] == '_') {
-				wordEnd++
-			}
-			word := upper[i:wordEnd]
-			skipKeywords := []string{"AND", "OR", "NOT", "IN", "IS", "NULL", "AS", "WHEN", "THEN", "ELSE", "END", "LIKE", "BETWEEN", "CASE"}
-			isSkip := false
-			for _, kw := range skipKeywords {
-				if word == kw {
-					isSkip = true
-					break
-				}
-			}
-			if isSkip {
-				i = wordEnd
-				continue
-			}
-		}
-
-		// Try to match table.column pattern
-		if ch != ' ' && ch != ',' && ch != '=' && ch != '!' && ch != '<' && ch != '>' && ch != '(' && ch != ')' {
-			// Read a potential identifier
-			start := i
-			for i < len(expr) && (unicode.IsLetter(rune(expr[i])) || unicode.IsDigit(rune(expr[i])) || expr[i] == '_' || expr[i] == '`') {
-				i++
-			}
-			ident := expr[start:i]
-			// Check if followed by a dot
-			if i < len(expr) && expr[i] == '.' {
-				i++ // skip dot
-				// Read the column name after the dot
-				colStart := i
-				for i < len(expr) && (unicode.IsLetter(rune(expr[i])) || unicode.IsDigit(rune(expr[i])) || expr[i] == '_' || expr[i] == '`') {
-					i++
-				}
-				if i > colStart {
-					colName := expr[colStart:i]
-					// Check it's not a number literal (e.g., 1.0)
-					if !isNumber(ident) {
-						refs = append(refs, ident+"."+colName)
-					}
-				}
-			}
-			continue
-		}
-		i++
-	}
-	return refs
-}
-
-// isNumber checks if a string is a numeric literal
-func isNumber(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, ch := range s {
-		if !unicode.IsDigit(ch) && ch != '.' {
-			return false
-		}
-	}
-	return true
-}
-
-// extractSubqueryColumns extracts column references from inside a (SELECT ... FROM ...) subquery
-func extractSubqueryColumns(expr string) []string {
-	// Find the innermost SELECT and extract column refs from it
-	upper := strings.ToUpper(expr)
-	selectIdx := strings.Index(upper, "(SELECT")
-	if selectIdx < 0 {
-		return nil
-	}
-
-	// Find the matching closing paren
-	start := selectIdx + 1
-	depth := 1
-	i := start
-	for i < len(expr) && depth > 0 {
-		if expr[i] == '(' {
-			depth++
-		} else if expr[i] == ')' {
-			depth--
-		}
-		i++
-	}
-	if depth != 0 {
-		return nil
-	}
-	inner := expr[start : i-1]
-
-	// Extract column refs from the inner SELECT
-	return extractAllColumnRefs(inner)
-}
-
-// isAggregateFunc checks if a function name is an aggregate function
-func isAggregateFunc(name string) bool {
-	switch name {
-	case "COUNT", "SUM", "AVG", "MAX", "MIN", "GROUP_CONCAT",
-		"STDDEV", "STDDEV_POP", "STDDEV_SAMP",
-		"VARIANCE", "VAR_POP", "VAR_SAMP",
-		"BIT_AND", "BIT_OR", "BIT_XOR",
-		"JSON_ARRAYAGG", "JSON_OBJECTAGG":
-		return true
-	}
-	return false
-}
 
 func (p *CustomParser) resolveSourceTable(expr string, aliasMap map[string]string, field *model.FieldMeta) {
 	expr = strings.TrimSpace(expr)
@@ -1489,6 +1224,36 @@ func (p *CustomParser) parseGroupBy(t *tokenizer, aliasMap map[string]string) []
 	return items
 }
 
+// parseHaving parses the HAVING clause into a condition tree.
+func (p *CustomParser) parseHaving(t *tokenizer, aliasMap map[string]string) (*model.ConditionNode, int) {
+	if !t.skipToKeyword("HAVING") {
+		return nil, 0
+	}
+
+	havingTokens := t.collectUntilKeywords("ORDER", "LIMIT")
+	if len(havingTokens) == 0 {
+		return nil, 0
+	}
+
+	// Parse the HAVING expression using the expression parser
+	ep := NewExprParser(havingTokens, p.dialect)
+	expr, err := ep.ParseExpression()
+	if err != nil {
+		// Fallback: try string-based parsing
+		havingStr := joinTokens(havingTokens, 0, len(havingTokens))
+		havingStr = strings.TrimSpace(havingStr)
+		if havingStr == "" {
+			return nil, 0
+		}
+		node, count := p.buildConditionTreeFallback(havingStr, aliasMap)
+		return node, count
+	}
+
+	node := ExprToConditionTree(expr, aliasMap)
+	count := countConditions(node)
+	return node, count
+}
+
 func (p *CustomParser) parseOrderBy(t *tokenizer, aliasMap map[string]string) []model.OrderByMeta {
 	var items []model.OrderByMeta
 
@@ -1901,13 +1666,16 @@ func (p *CustomParser) parseSetOperations(tokens []token, firstResult *model.SQL
 				opType = "EXCEPT"
 			}
 			if opType != "" {
-				// Parse the right side
+				// Parse the right side using a separate parser instance to avoid
+				// resetting the shared ID generator mid-parse.
 				skipCount := 1
 				if opType == "UNION ALL" {
 					skipCount = 2
 				}
-				remaining := joinTokens(tokens, i+skipCount, len(tokens))
-				rightResult, err := p.Parse(remaining)
+				remaining := make([]token, len(tokens)-i-skipCount)
+				copy(remaining, tokens[i+skipCount:])
+				rightParser := NewCustomParserWithDialect(p.dialect.ID)
+				rightResult, err := rightParser.parseSelectOnly(remaining)
 				if err == nil {
 					ops = append(ops, model.SetOperation{
 						Type:  opType,
@@ -1921,6 +1689,123 @@ func (p *CustomParser) parseSetOperations(tokens []token, firstResult *model.SQL
 		i++
 	}
 	return ops
+}
+
+// parseSelectOnly parses a SELECT statement from tokens without resetting IDs.
+// This is used internally by set operation parsing to avoid ID counter corruption.
+func (p *CustomParser) parseSelectOnly(tokens []token) (*model.SQLAnalysisResult, error) {
+	result := &model.SQLAnalysisResult{
+		StatementType: "SELECT",
+		Dialect:       string(p.dialect.ID),
+	}
+
+	// Parse CTEs if present
+	var ctes []model.CTEDefinition
+	if len(tokens) > 0 && strings.ToUpper(tokens[0].value) == "WITH" {
+		ctes, tokens = p.parseCTEs(tokens)
+		if len(ctes) > 0 {
+			result.CTEs = ctes
+		}
+	}
+
+	aliasMap := make(map[string]string)
+	tableAliasMap := make(map[string]string)
+
+	for _, cte := range ctes {
+		aliasMap[strings.ToLower(cte.Name)] = cte.Name
+	}
+
+	t := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	tables, joins, err := p.parseFromAndJoins(t, aliasMap, tableAliasMap)
+	if err != nil {
+		return nil, err
+	}
+
+	t2 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	fields := p.parseSelectFields(t2, aliasMap)
+
+	t3 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	whereTree, whereCount := p.parseWhereClause(t3, aliasMap)
+
+	t4 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	groupBy := p.parseGroupBy(t4, aliasMap)
+
+	t4b := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	havingTree, havingCount := p.parseHaving(t4b, aliasMap)
+
+	t5 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	orderBy := p.parseOrderBy(t5, aliasMap)
+
+	t6 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	limit := p.parseLimit(t6)
+
+	p.resolveJoinConditionAliases(joins, tableAliasMap)
+
+	result.Tables = tables
+	result.Joins = joins
+	result.Fields = fields
+	result.WhereTree = whereTree
+	result.HavingTree = havingTree
+	result.GroupBy = groupBy
+	result.OrderBy = orderBy
+	result.Limit = limit
+	result.Risks = make([]model.RiskMeta, 0)
+
+	if result.Tables == nil {
+		result.Tables = make([]model.TableMeta, 0)
+	}
+	if result.Joins == nil {
+		result.Joins = make([]model.JoinMeta, 0)
+	}
+	if result.Fields == nil {
+		result.Fields = make([]model.FieldMeta, 0)
+	}
+	if result.GroupBy == nil {
+		result.GroupBy = make([]model.GroupByMeta, 0)
+	}
+	if result.OrderBy == nil {
+		result.OrderBy = make([]model.OrderByMeta, 0)
+	}
+
+	if len(tables) == 1 {
+		tableName := tables[0].Name
+		for i := range fields {
+			if fields[i].SourceTable == "" && fields[i].FieldType == "column" {
+				fields[i].SourceTable = tableName
+			}
+		}
+		if whereTree != nil {
+			p.resolveUnqualifiedWhere(whereTree, tableName)
+		}
+	}
+
+	p.populateTableFields(tables, fields, whereTree, joins)
+
+	hasWindowFunc := false
+	for _, f := range fields {
+		if f.WindowSpec != nil {
+			hasWindowFunc = true
+			break
+		}
+	}
+
+	result.Summary = model.SQLSummary{
+		TableCount:    len(tables),
+		JoinCount:     len(joins),
+		FieldCount:    len(fields),
+		WhereCount:    whereCount,
+		HavingCount:   havingCount,
+		HasGroupBy:    len(groupBy) > 0,
+		HasOrderBy:    len(orderBy) > 0,
+		HasLimit:      limit != nil,
+		HasHaving:     havingCount > 0,
+		HasWindowFunc: hasWindowFunc,
+		HasCTE:        len(ctes) > 0,
+	}
+
+	result.Graph = p.buildGraph(tables, joins)
+
+	return result, nil
 }
 
 // parseInsert handles INSERT INTO table (columns) VALUES/subquery.
@@ -2003,6 +1888,11 @@ func (p *CustomParser) parseUpdate(sql string) (*model.SQLAnalysisResult, error)
 	table.Role = "main"
 	result.Tables = []model.TableMeta{*table}
 
+	// Parse SET assignments
+	t2 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
+	setFields := p.parseSetAssignments(t2, table.Name)
+	result.Fields = setFields
+
 	// Parse WHERE clause
 	t3 := &tokenizer{tokens: tokens, pos: 0, dialect: p.dialect}
 	whereTree, whereCount := p.parseWhereClause(t3, aliasMap)
@@ -2011,9 +1901,53 @@ func (p *CustomParser) parseUpdate(sql string) (*model.SQLAnalysisResult, error)
 	result.Summary = model.SQLSummary{
 		TableCount: 1,
 		WhereCount: whereCount,
+		FieldCount: len(setFields),
 	}
 	result.Graph = p.buildGraph(result.Tables, result.Joins)
 	return result, nil
+}
+
+// parseSetAssignments parses SET col1 = val1, col2 = val2 in UPDATE statements.
+func (p *CustomParser) parseSetAssignments(t *tokenizer, tableName string) []model.FieldMeta {
+	if !t.skipToKeyword("SET") {
+		return nil
+	}
+
+	var fields []model.FieldMeta
+	for t.pos < len(t.tokens) {
+		// Stop at WHERE
+		if strings.ToUpper(t.tokens[t.pos].value) == "WHERE" {
+			break
+		}
+
+		// Read column name
+		col := stripBackticks(t.tokens[t.pos].value)
+		t.pos++
+
+		// Skip = sign
+		if t.pos < len(t.tokens) && t.tokens[t.pos].value == "=" {
+			t.pos++
+		}
+
+		// Read value until comma or WHERE
+		value := t.readUntilCommaOrKeyword()
+		value = strings.TrimSpace(value)
+
+		fields = append(fields, model.FieldMeta{
+			ID:           utils.NewID("field"),
+			OutputName:   col,
+			SourceColumn: col,
+			SourceTable:  tableName,
+			Expression:   col + " = " + value,
+			FieldType:    "column",
+		})
+
+		// Skip comma
+		if t.pos < len(t.tokens) && t.tokens[t.pos].value == "," {
+			t.pos++
+		}
+	}
+	return fields
 }
 
 // parseDelete handles DELETE FROM table WHERE conditions.

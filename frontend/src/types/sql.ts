@@ -23,6 +23,7 @@ export interface SQLAnalysisResult {
   joins: JoinMeta[]
   fields: FieldMeta[]
   whereTree?: ConditionNode
+  havingTree?: ConditionNode
   groupBy: GroupByMeta[]
   orderBy: OrderByMeta[]
   limit?: LimitMeta
@@ -37,9 +38,11 @@ export interface SQLSummary {
   joinCount: number
   fieldCount: number
   whereCount: number
+  havingCount: number
   hasGroupBy: boolean
   hasOrderBy: boolean
   hasLimit: boolean
+  hasHaving: boolean
   complexity: 'LOW' | 'MEDIUM' | 'HIGH'
   hasWindowFunc?: boolean
   hasCTE?: boolean

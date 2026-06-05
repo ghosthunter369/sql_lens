@@ -27,6 +27,38 @@
   --radius-md: 8px;
   --radius-lg: 10px;
   --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  --color-card-bg: #ffffff;
+  --color-card-hover: #fafafa;
+  --color-tag-bg: #f5f5f5;
+  --color-sidebar-bg: #ffffff;
+  --color-status-bg: #fafafa;
+}
+
+/* === Dark Mode Variables === */
+[data-theme="dark"] {
+  --color-bg: #0d1117;
+  --color-surface: #161b22;
+  --color-border: #30363d;
+  --color-border-light: #21262d;
+  --color-primary: #58a6ff;
+  --color-primary-bg: #0d2240;
+  --color-primary-border: #1f3d5e;
+  --color-text: #c9d1d9;
+  --color-text-secondary: #8b949e;
+  --color-text-muted: #6e7681;
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-danger: #f85149;
+  --color-info: #58a6ff;
+  --color-header-bg: #010409;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+  --color-card-bg: #161b22;
+  --color-card-hover: #1c2128;
+  --color-tag-bg: #21262d;
+  --color-sidebar-bg: #0d1117;
+  --color-status-bg: #161b22;
 }
 
 /* === Reset & Base === */
@@ -230,6 +262,13 @@ body {
 .sql-lens-summary-card-icon.cyan   { background: #e6fffb; color: #06b6d4; }
 .sql-lens-summary-card-icon.red    { background: #fef2f2; color: #ef4444; }
 
+[data-theme="dark"] .sql-lens-summary-card-icon.blue   { background: #0d2240; color: #58a6ff; }
+[data-theme="dark"] .sql-lens-summary-card-icon.green  { background: #0d2818; color: #3fb950; }
+[data-theme="dark"] .sql-lens-summary-card-icon.orange { background: #2d1b00; color: #d29922; }
+[data-theme="dark"] .sql-lens-summary-card-icon.purple { background: #1e1040; color: #a78bfa; }
+[data-theme="dark"] .sql-lens-summary-card-icon.cyan   { background: #0d2420; color: #39d0d8; }
+[data-theme="dark"] .sql-lens-summary-card-icon.red    { background: #2d0a0a; color: #f85149; }
+
 .sql-lens-summary-card-info {
   display: flex;
   flex-direction: column;
@@ -338,8 +377,8 @@ body {
    GRAPH — TABLE NODE
    ============================ */
 .table-node {
-  background: #fff;
-  border: 2px solid #e5e7eb;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
   border-radius: var(--radius-md);
   min-width: 200px;
   max-width: 300px;
@@ -563,6 +602,12 @@ body {
   color: #ff9500;
   background: #fff4e5;
   border: 1px solid #fed7aa;
+}
+
+.where-logic-tag.not {
+  color: #ff4d4f;
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
 }
 
 /* ============================
@@ -994,4 +1039,33 @@ body {
   background-size: 800px 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 4px;
+}
+
+/* === Responsive Design === */
+@media (max-width: 768px) {
+  .sql-lens-content {
+    flex-direction: column;
+  }
+
+  .sql-lens-left-panel,
+  .sql-lens-right-panel {
+    width: 100% !important;
+    min-height: 0;
+  }
+
+  .sql-lens-left-panel {
+    height: 40vh;
+  }
+
+  .sql-lens-right-panel {
+    flex: 1;
+  }
+
+  .sql-lens-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .sql-lens-header-badge {
+    display: none;
+  }
 }

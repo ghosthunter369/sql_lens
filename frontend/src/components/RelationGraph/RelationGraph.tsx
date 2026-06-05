@@ -1,5 +1,5 @@
 import { useMemo, useCallback, useRef } from 'react'
-import { Button, Space, Tooltip } from 'antd'
+import { Button, Space, Tooltip, message } from 'antd'
 import { DownloadOutlined, ExpandOutlined, AimOutlined } from '@ant-design/icons'
 import { ReactFlow, Background, Controls, MiniMap, useReactFlow, ReactFlowProvider, BackgroundVariant } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -61,8 +61,8 @@ function RelationGraphInner() {
         pixelRatio: 2,
       })
       saveAs(dataUrl, 'sql-lens-graph.png')
-    } catch {
-      // ignore
+    } catch (err) {
+      message.error('导出 PNG 失败: ' + (err instanceof Error ? err.message : '未知错误'))
     }
   }, [])
 

@@ -38,14 +38,8 @@ func ParseSQLHandler(c *gin.Context) {
 	// 1. Log extraction
 	extractResult, err := extractor.AutoExtract(req.RawText)
 	if err != nil {
-		c.JSON(http.StatusOK, model.APIResponse{
-			Success: false,
-			Error: &model.APIError{
-				Code:    "LOG_EXTRACT_ERROR",
-				Message: "无法从输入中提取 SQL",
-				Detail:  err.Error(),
-			},
-		})
+		code, resp := model.ErrorResponse("LOG_EXTRACT_ERROR", "无法从输入中提取 SQL", err.Error())
+		c.JSON(code, resp)
 		return
 	}
 
@@ -56,14 +50,8 @@ func ParseSQLHandler(c *gin.Context) {
 	if req.Options.RestoreBindings && len(extractResult.Bindings) > 0 {
 		restoredSQL, err = binding.RestoreBindings(sql, extractResult.Bindings)
 		if err != nil {
-			c.JSON(http.StatusOK, model.APIResponse{
-				Success: false,
-				Error: &model.APIError{
-					Code:    "BINDING_RESTORE_ERROR",
-					Message: "SQL 参数回填失败",
-					Detail:  err.Error(),
-				},
-			})
+			code, resp := model.ErrorResponse("BINDING_RESTORE_ERROR", "SQL 参数回填失败", err.Error())
+			c.JSON(code, resp)
 			return
 		}
 	}
@@ -76,14 +64,8 @@ func ParseSQLHandler(c *gin.Context) {
 	sqlParser := parser.NewCustomParserWithDialect(dialectID)
 	analysisResult, err := sqlParser.Parse(restoredSQL)
 	if err != nil {
-		c.JSON(http.StatusOK, model.APIResponse{
-			Success: false,
-			Error: &model.APIError{
-				Code:    "SQL_PARSE_ERROR",
-				Message: "SQL 解析失败",
-				Detail:  err.Error(),
-			},
-		})
+		code, resp := model.ErrorResponse("SQL_PARSE_ERROR", "SQL 解析失败", err.Error())
+		c.JSON(code, resp)
 		return
 	}
 
@@ -96,14 +78,8 @@ func ParseSQLHandler(c *gin.Context) {
 	transformer := analyzer.NewASTTransformer()
 	analysisResult, err = transformer.Transform(analysisResult)
 	if err != nil {
-		c.JSON(http.StatusOK, model.APIResponse{
-			Success: false,
-			Error: &model.APIError{
-				Code:    "AST_TRANSFORM_ERROR",
-				Message: "AST 转换失败",
-				Detail:  err.Error(),
-			},
-		})
+		code, resp := model.ErrorResponse("AST_TRANSFORM_ERROR", "AST 转换失败", err.Error())
+		c.JSON(code, resp)
 		return
 	}
 
@@ -121,10 +97,8 @@ func ParseSQLHandler(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, model.APIResponse{
-		Success: true,
-		Data:    analysisResult,
-	})
+	code, resp := model.SuccessResponse(analysisResult)
+	c.JSON(code, resp)
 }
 
 func ExtractSQLHandler(c *gin.Context) {
@@ -143,14 +117,8 @@ func ExtractSQLHandler(c *gin.Context) {
 
 	extractResult, err := extractor.AutoExtract(req.RawLog)
 	if err != nil {
-		c.JSON(http.StatusOK, model.APIResponse{
-			Success: false,
-			Error: &model.APIError{
-				Code:    "LOG_EXTRACT_ERROR",
-				Message: "无法从输入中提取 SQL",
-				Detail:  err.Error(),
-			},
-		})
+		code, resp := model.ErrorResponse("LOG_EXTRACT_ERROR", "无法从输入中提取 SQL", err.Error())
+		c.JSON(code, resp)
 		return
 	}
 
@@ -163,15 +131,13 @@ func ExtractSQLHandler(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, model.APIResponse{
-		Success: true,
-		Data: model.ExtractResultResponse{
-			SQL:         extractResult.SQL,
-			Bindings:    extractResult.Bindings,
-			RestoredSQL: restoredSQL,
-			LogType:     extractResult.LogType,
-		},
+	code, resp := model.SuccessResponse(model.ExtractResultResponse{
+		SQL:         extractResult.SQL,
+		Bindings:    extractResult.Bindings,
+		RestoredSQL: restoredSQL,
+		LogType:     extractResult.LogType,
 	})
+	c.JSON(code, resp)
 }
 
 func FormatSQLHandler(c *gin.Context) {
@@ -189,12 +155,10 @@ func FormatSQLHandler(c *gin.Context) {
 	}
 
 	formatted := formatSQLSimple(req.SQL)
-	c.JSON(http.StatusOK, model.APIResponse{
-		Success: true,
-		Data: model.FormatResultResponse{
-			FormattedSQL: formatted,
-		},
+	code, resp := model.SuccessResponse(model.FormatResultResponse{
+		FormattedSQL: formatted,
 	})
+	c.JSON(code, resp)
 }
 
 func BuildMarkdownReportHandler(c *gin.Context) {
@@ -213,21 +177,13 @@ func BuildMarkdownReportHandler(c *gin.Context) {
 
 	markdown := report.BuildMarkdownReport(req.AnalysisResult)
 
-	c.JSON(http.StatusOK, model.APIResponse{
-		Success: true,
-		Data: model.MarkdownReportResponse{
-			Markdown: markdown,
-		},
+	code, resp := model.SuccessResponse(model.MarkdownReportResponse{
+		Markdown: markdown,
 	})
+	c.JSON(code, resp)
 }
 
-// Simple SQL formatting (basic version, for a more advanced formatter use sql-formatter on frontend)
+// formatSQLSimple formats SQL by capitalizing keywords and adding newlines.
 func formatSQLSimple(sql string) string {
-	if sql == "" {
-		return ""
-	}
-
-	// This is a basic formatter. The formatted SQL from the parser's transformer
-	// provides the primary formatting. This is a fallback.
-	return sql
+	return analyzer.FormatSQL(sql)
 }

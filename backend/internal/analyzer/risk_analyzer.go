@@ -124,15 +124,19 @@ func checkWhereFuncNode(node *model.ConditionNode, risks *[]model.RiskMeta) {
 	if node == nil {
 		return
 	}
-	if node.Type == "CONDITION" && strings.Contains(node.Field, "(") {
-		*risks = append(*risks, model.RiskMeta{
-			ID:          utils.NewID("risk"),
-			Level:       "warning",
-			Type:        "WHERE_FIELD_FUNCTION",
-			Message:     "WHERE 条件中对字段使用了函数: " + node.Expr,
-			Suggestion:  "对字段使用函数可能影响索引使用，建议尽量改为范围查询或在应用层处理。",
-			RelatedExpr: node.Expr,
-		})
+	if node.Type == "CONDITION" {
+		// Check both Field and Expr for function call patterns
+		hasFunc := strings.Contains(node.Field, "(") || strings.Contains(node.Expr, "(")
+		if hasFunc {
+			*risks = append(*risks, model.RiskMeta{
+				ID:          utils.NewID("risk"),
+				Level:       "warning",
+				Type:        "WHERE_FIELD_FUNCTION",
+				Message:     "WHERE 条件中对字段使用了函数: " + node.Expr,
+				Suggestion:  "对字段使用函数可能影响索引使用，建议尽量改为范围查询或在应用层处理。",
+				RelatedExpr: node.Expr,
+			})
+		}
 	}
 	for _, child := range node.Children {
 		checkWhereFuncNode(child, risks)

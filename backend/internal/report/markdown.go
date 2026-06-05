@@ -43,6 +43,7 @@ func BuildMarkdownReport(result *model.SQLAnalysisResult) string {
 	b.WriteString(fmt.Sprintf("| 是否有 GROUP BY | %s |\n", boolToStr(result.Summary.HasGroupBy)))
 	b.WriteString(fmt.Sprintf("| 是否有 ORDER BY | %s |\n", boolToStr(result.Summary.HasOrderBy)))
 	b.WriteString(fmt.Sprintf("| 是否有 LIMIT | %s |\n", boolToStr(result.Summary.HasLimit)))
+	b.WriteString(fmt.Sprintf("| 是否有 HAVING | %s |\n", boolToStr(result.Summary.HasHaving)))
 	b.WriteString(fmt.Sprintf("| 是否有窗口函数 | %s |\n", boolToStr(result.Summary.HasWindowFunc)))
 	b.WriteString(fmt.Sprintf("| 是否有 CTE | %s |\n", boolToStr(result.Summary.HasCTE)))
 	b.WriteString(fmt.Sprintf("| 是否有 UNION | %s |\n", boolToStr(result.Summary.HasUnion)))
@@ -124,6 +125,13 @@ func BuildMarkdownReport(result *model.SQLAnalysisResult) string {
 	} else {
 		b.WriteString("## WHERE 条件\n\n")
 		b.WriteString("无 WHERE 条件\n\n")
+	}
+
+	// HAVING conditions
+	if result.HavingTree != nil {
+		b.WriteString("## HAVING 条件\n\n")
+		writeWhereTree(&b, result.HavingTree, 0)
+		b.WriteString("\n")
 	}
 
 	// GROUP BY
